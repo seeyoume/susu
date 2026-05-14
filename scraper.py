@@ -392,6 +392,52 @@ class XHSScraper:
             self._check_stop()
             time.sleep(min(0.3, end - time.time()))
 
+    # ── 反检测：人类行为模拟 ─────────────────────────────────────
+    def _human_move(self, tx, ty):
+        """贝塞尔曲线鼠标移动 — 非直线，带加速/减速"""
+        import math
+        cx = getattr(self, '_mx', tx + random.randint(-200, 200))
+        cy = getattr(self, '_my', ty + random.randint(-200, 200))
+        dist = math.hypot(tx - cx, ty - cy)
+        steps = max(8, min(40, int(dist / 18)))
+        # 随机控制点（产生弧线）
+        cpx = (cx + tx) / 2 + random.uniform(-dist * 0.4, dist * 0.4)
+        cpy = (cy + ty) / 2 + random.uniform(-dist * 0.4, dist * 0.4)
+        for i in range(steps + 1):
+            t = i / steps
+            # ease-in-out: 在 t 附近加速中间减速
+            t_ease = t * t * (3 - 2 * t)
+            bx = (1 - t_ease)**2 * cx + 2 * (1 - t_ease) * t_ease * cpx + t_ease**2 * tx
+            by = (1 - t_ease)**2 * cy + 2 * (1 - t_ease) * t_ease * cpy + t_ease**2 * ty
+            self.page.mouse.move(bx, by)
+            time.sleep(random.uniform(0.008, 0.022))
+        self._mx, self._my = tx, ty
+
+    def _human_click(self, x, y, btn="left"):
+        """移动到目标（贝塞尔）后点击"""
+        self._human_move(x + random.uniform(-3, 3), y + random.uniform(-3, 3))
+        self._sleep(random.uniform(0.05, 0.18))
+        self.page.mouse.click(x, y, button=btn)
+        self._mx, self._my = x, y
+
+    def _human_type(self, text, base_delay_ms=80):
+        """模拟人类打字：变速、偶尔停顿、极低概率误触+退格"""
+        for i, ch in enumerate(text):
+            # 偶尔停顿（思考/看屏幕）
+            if random.random() < 0.05:
+                self._sleep(random.uniform(0.3, 1.2))
+            # 极低概率误触一个字符再退格
+            if random.random() < 0.015 and ch.isascii():
+                wrong = random.choice('qwertasdfgzxcvb')
+                self.page.keyboard.type(wrong, delay=random.randint(40, 100))
+                self._sleep(random.uniform(0.08, 0.25))
+                self.page.keyboard.press("Backspace")
+                self._sleep(random.uniform(0.05, 0.15))
+            delay = int(base_delay_ms * random.uniform(0.4, 2.2))
+            self.page.keyboard.type(ch, delay=delay)
+        # 短暂停顿表示打字结束
+        self._sleep(random.uniform(0.2, 0.5))
+
     def _on_request(self, req):
         """ 抓取关键写操作的 POST 请求（评论/点赞/关注），用于反向调试 """
         try:
@@ -596,8 +642,14 @@ class XHSScraper:
         self.page.goto(url, wait_until="domcontentloaded")
         self._sleep(4)
 
+        # 诊断：记录缓冲中所有 API 响应 URL
+        buf_urls = [x["url"] for x in self._api_buffer]
+        self.log(f"  [dbg] buffer({len(buf_urls)}): {buf_urls[:5]}")
+
         detail = {"note_id": note_id, "url": url}
-        for item in self._drain("/feed"):
+        feed_items = self._drain("/feed")
+        self.log(f"  [dbg] /feed hits: {len(feed_items)}")
+        for item in feed_items:
             d = item["data"].get("data") or {}
             for it in d.get("items", []) or []:
                 nc = it.get("note_card") or {}
@@ -638,8 +690,93 @@ class XHSScraper:
             except Exception:
                 pass
 
+        # 兜底：如果 image_urls 为空（API 没拦到，纯 SSR 页面），从 DOM 直接提取
+        if not detail.get("image_urls"):
+            try:
+                dom_data = self._scrape_note_from_dom()
+                if dom_data:
+                    # 不覆盖已有字段
+                    for k, v in dom_data.items():
+                        if v and not detail.get(k):
+                            detail[k] = v
+                    self.log(f"  [dbg] DOM 兜底: 提取 {len((dom_data.get('image_urls') or '').split(',') if dom_data.get('image_urls') else [])} 张图")
+            except Exception as e:
+                self.log(f"  [dbg] DOM 兜底失败: {e}")
+
         comments = self._fetch_comments(max_comments) if want_comments else []
         return detail, comments
+
+    def _scrape_note_from_dom(self):
+        """从笔记页 DOM/window 全局对象提取数据 — SSR 兜底"""
+        return self.page.evaluate("""() => {
+            const out = {};
+            // 1. 尝试 window.__INITIAL_STATE__ (XHS SSR 注入点)
+            try {
+                const st = window.__INITIAL_STATE__;
+                if (st) {
+                    // XHS 把笔记数据放在 st.note.noteDetailMap[noteId].note
+                    const noteMap = st.note && (st.note.noteDetailMap || st.note.detailMap);
+                    if (noteMap) {
+                        const keys = Object.keys(noteMap);
+                        for (const k of keys) {
+                            const n = noteMap[k];
+                            const nc = n && (n.note || n);
+                            if (!nc) continue;
+                            const imgs = (nc.imageList || nc.image_list || []).map(
+                                i => i.urlDefault || i.url_default || i.url || ''
+                            ).filter(Boolean);
+                            if (imgs.length) {
+                                out.title = nc.title || '';
+                                out.desc = nc.desc || '';
+                                out.type = nc.type || '';
+                                const user = nc.user || {};
+                                out.author = user.nickname || '';
+                                out.author_id = user.userId || user.user_id || '';
+                                const info = nc.interactInfo || nc.interact_info || {};
+                                out.liked_count = String(info.likedCount || info.liked_count || '');
+                                out.collected_count = String(info.collectedCount || info.collected_count || '');
+                                out.comment_count = String(info.commentCount || info.comment_count || '');
+                                out.share_count = String(info.shareCount || info.share_count || '');
+                                out.ip_location = nc.ipLocation || nc.ip_location || '';
+                                out.tag_list = (nc.tagList || nc.tag_list || []).map(t => t.name || '').filter(Boolean).join(',');
+                                out.image_urls = imgs.join(',');
+                                const video = nc.video || {};
+                                const streams = (((video.media || {}).stream || {}).h264) || [];
+                                if (streams.length) out.video_url = streams[0].masterUrl || streams[0].master_url || '';
+                                return out;
+                            }
+                        }
+                    }
+                }
+            } catch(e) {}
+            // 2. DOM 兜底: 从 img 标签和 meta 提取
+            try {
+                const urls = new Set();
+                const sels = [
+                    '.swiper-wrapper img', '.swiper-slide img',
+                    '.note-slider-img', '.note-content img',
+                    '.media-container img', '.note-image',
+                    'meta[property="og:image"]'
+                ];
+                for (const sel of sels) {
+                    for (const el of document.querySelectorAll(sel)) {
+                        const src = el.src || el.getAttribute('content') || '';
+                        if (!src || !src.startsWith('http')) continue;
+                        if (src.includes('avatar') || src.includes('emoji')) continue;
+                        if (src.includes('xhscdn') || src.includes('xiaohongshu')) urls.add(src);
+                    }
+                }
+                if (urls.size) out.image_urls = Array.from(urls).join(',');
+                // title 兜底
+                const t1 = document.querySelector('meta[property="og:title"]');
+                if (t1) out.title = t1.getAttribute('content') || '';
+                const t2 = document.querySelector('.title, #detail-title');
+                if (!out.title && t2) out.title = t2.textContent.trim();
+                const t3 = document.querySelector('meta[name="description"]');
+                if (t3) out.desc = t3.getAttribute('content') || '';
+            } catch(e) {}
+            return out;
+        }""")
 
     def fetch_note_ip_only(self, url_or_id, timeout=10):
         """ 仅采 IP 属地 - 加载笔记页 → API + DOM 双重抓取，比 fetch_note_detail 快 5-10x
@@ -1220,34 +1357,76 @@ class XHSScraper:
         return rows
 
     # ---------------- 媒体下载 ----------------
+    def _fetch_bytes(self, url, timeout=30000, referer=None):
+        """用浏览器上下文的 request 下载（带 Cookie/Headers），失败时 fallback 到 urllib
+        referer: 来源页 URL（XHS CDN 校验 Referer，必须用具体笔记页 URL）
+        """
+        ref = referer or "https://www.xiaohongshu.com/"
+        try:
+            resp = self.context.request.get(
+                url,
+                headers={
+                    "Referer": ref,
+                    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                    "Accept-Language": "zh-CN,zh;q=0.9",
+                    "Sec-Fetch-Dest": "image",
+                    "Sec-Fetch-Mode": "no-cors",
+                    "Sec-Fetch-Site": "cross-site",
+                },
+                timeout=timeout,
+            )
+            if resp.ok:
+                return resp.body()
+            else:
+                self.log(f"    [dbg] CDN {resp.status}: {url[:90]}")
+        except Exception as e:
+            self.log(f"    [dbg] ctx.request 异常: {e}")
+        # fallback: urllib
+        try:
+            import urllib.request
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                              "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Referer": ref,
+                "Accept": "image/avif,image/webp,image/*,*/*;q=0.8",
+            })
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.read()
+        except Exception:
+            return None
+
     def download_media(self, detail, out_root):
         """ 下载笔记的图片和视频到 out_root/media_<note_id>/ """
-        import urllib.request
         nid = detail.get("note_id", "x")
         folder = Path(out_root) / f"media_{nid}"
         folder.mkdir(parents=True, exist_ok=True)
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer": "https://www.xiaohongshu.com/",
-        }
         saved = []
 
         # 图片
         image_urls = [u for u in (detail.get("image_urls") or "").split(",") if u]
+        self.log(f"  [dbg] image_urls({len(image_urls)}): {image_urls[:2]}")
+        # 笔记页 URL 作 Referer（XHS CDN 校验来源页）
+        note_url = detail.get("url", "https://www.xiaohongshu.com/")
         for i, url in enumerate(image_urls, 1):
             self._check_stop()
-            # 去掉 XHS 图片处理后缀（!nd_dft_wgth_jpg_3 之类）取原图
-            clean = url.split("!")[0] if "!" in url else url
-            ext = ".jpg"
-            for e in (".webp", ".png", ".jpeg"):
-                if e in clean.lower():
+            # http -> https（XHS CDN 强制 HTTPS）
+            if url.startswith("http://"):
+                url = "https://" + url[7:]
+            # 关键：保留 !xxx 处理后缀（CDN 鉴权需要），仅在带后缀时优先尝试 webp
+            # 例如：https://sns-webpic-qc.xhscdn.com/.../xxx!nd_dft_wlteh_webp_3
+            ext = ".webp" if "webp" in url.lower() else ".jpg"
+            for e in (".png", ".jpeg"):
+                if e in url.lower():
                     ext = e; break
             fp = folder / f"img_{i:03d}{ext}"
             try:
-                req = urllib.request.Request(clean, headers=headers)
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    fp.write_bytes(resp.read())
+                data = self._fetch_bytes(url, referer=note_url)
+                # 第一次失败：尝试砍掉处理后缀
+                if not data and "!" in url:
+                    data = self._fetch_bytes(url.split("!")[0], referer=note_url)
+                if not data:
+                    raise ValueError("空响应")
+                fp.write_bytes(data)
                 saved.append(str(fp))
                 self.log(f"  ✓ 图 {i}/{len(image_urls)}")
             except Exception as e:
@@ -1259,9 +1438,10 @@ class XHSScraper:
             self._check_stop()
             fp = folder / "video.mp4"
             try:
-                req = urllib.request.Request(vurl, headers=headers)
-                with urllib.request.urlopen(req, timeout=120) as resp:
-                    fp.write_bytes(resp.read())
+                data = self._fetch_bytes(vurl, timeout=120000)
+                if not data:
+                    raise ValueError("空响应")
+                fp.write_bytes(data)
                 saved.append(str(fp))
                 self.log("  ✓ 视频")
             except Exception as e:
@@ -1856,10 +2036,10 @@ class XHSScraper:
                 raise RuntimeError("找不到标题占位符 '输入标题'")
             # 点标题占位 → 输入
             self.log(f"  → 点标题 @ ({int(tp['x'])},{int(tp['y'])})")
-            self.page.mouse.click(tp["x"], tp["y"])
-            self._sleep(0.5)
-            self.page.keyboard.type(title[:30], delay=20)
-            self._sleep(0.5)
+            self._human_click(tp["x"], tp["y"])
+            self._sleep(random.uniform(0.3, 0.6))
+            self._human_type(title[:30])
+            self._sleep(random.uniform(0.3, 0.6))
             self.log(f"  ✓ 标题填好")
 
             # 点正文占位 → 输入（注意 body 位置在标题输入后可能上移）
@@ -1878,27 +2058,34 @@ class XHSScraper:
             bp_use = bp2 or bp
             if bp_use:
                 self.log(f"  → 点正文 @ ({int(bp_use['x'])},{int(bp_use['y'])})")
-                self.page.mouse.click(bp_use["x"], bp_use["y"])
-                self._sleep(0.5)
+                self._human_click(bp_use["x"], bp_use["y"])
+                self._sleep(random.uniform(0.3, 0.6))
                 full_body = body
                 if tags:
                     full_body += "\n" + " ".join(f"#{t}#" for t in tags)
-                # 长文正文较长，用 keyboard.insert_text 一次性灌入更快
-                try:
-                    self.page.keyboard.insert_text(full_body)
-                except Exception:
-                    self.page.keyboard.type(full_body, delay=5)
+                # 分段真实打字：每段 40 字左右停顿一下，模拟人类输入节奏
+                chunk = 40
+                for start in range(0, len(full_body), chunk):
+                    part = full_body[start:start + chunk]
+                    self._human_type(part, base_delay_ms=55)
+                    if start + chunk < len(full_body):
+                        self._sleep(random.uniform(0.2, 0.6))
                 self._sleep(1)
                 self.log(f"  ✓ 正文填好")
             else:
                 # 用 Tab 键尝试从标题跳到正文
                 try:
                     self.page.keyboard.press("Tab")
-                    self._sleep(0.5)
+                    self._sleep(random.uniform(0.4, 0.7))
                     full_body = body
                     if tags:
                         full_body += "\n" + " ".join(f"#{t}#" for t in tags)
-                    self.page.keyboard.insert_text(full_body)
+                    chunk = 40
+                    for start in range(0, len(full_body), chunk):
+                        part = full_body[start:start + chunk]
+                        self._human_type(part, base_delay_ms=55)
+                        if start + chunk < len(full_body):
+                            self._sleep(random.uniform(0.2, 0.5))
                     self.log(f"  ✓ 正文填好(Tab键)")
                 except Exception:
                     self.log("  ⚠ 找不到正文位置，可能正文为空")
@@ -1924,19 +2111,12 @@ class XHSScraper:
                 try: self._dump_debug(f"{note_type}_title_not_found")
                 except Exception: pass
                 raise RuntimeError("找不到标题输入框（DOM 可能变了）")
-            # 真实点击聚焦
-            self.page.mouse.click(title_pos["x"], title_pos["y"])
+            # 贝塞尔曲线点击聚焦
+            self._human_click(title_pos["x"], title_pos["y"])
             self._sleep(random.uniform(0.3, 0.6))
-            # 全选清空已有内容
             self.page.keyboard.press("Control+a")
             self._sleep(random.uniform(0.1, 0.2))
-            # 逐字输入：delay 加随机抖动，模拟真人打字速度差异
-            t_text = title[:30]
-            for char in t_text:
-                self.page.keyboard.type(char, delay=random.randint(60, 180))
-                # 偶尔停顿（思考下一个字）
-                if random.random() < 0.08:
-                    self._sleep(random.uniform(0.2, 0.6))
+            self._human_type(title[:30])
             self.log(f"  ✓ 标题填好")
             self._sleep(random.uniform(0.4, 0.8))
 
@@ -1969,16 +2149,14 @@ class XHSScraper:
                 return best;
             }""")
             if body_pos:
-                self.page.mouse.click(body_pos["x"], body_pos["y"])
+                self._human_click(body_pos["x"], body_pos["y"])
                 self._sleep(random.uniform(0.3, 0.6))
-                # 正文较长：先用 insert_text 批量灌入（更快），
-                # 再追加 tags 走 keyboard.type（让 tag 部分留有打字感）
-                try:
-                    self.page.keyboard.insert_text(full_body)
-                except Exception:
-                    # insert_text 不支持时回退逐字（会慢）
-                    for char in full_body:
-                        self.page.keyboard.type(char, delay=random.randint(20, 60))
+                chunk = 40
+                for start in range(0, len(full_body), chunk):
+                    part = full_body[start:start + chunk]
+                    self._human_type(part, base_delay_ms=55)
+                    if start + chunk < len(full_body):
+                        self._sleep(random.uniform(0.15, 0.5))
                 ok = True
             else:
                 ok = False
@@ -1993,65 +2171,367 @@ class XHSScraper:
         # 图文/视频: 直接(发布)
         self._sleep(2)
 
-        # JS: 找发布相关按钮
-        # 过滤掉：顶部 nav (Y < 30%vh) + 左侧 sidebar (X < 200)
-        # 优先级：推进按钮(一键排版/下一步) 比 发布按钮 更具体先匹配
+        # JS: 找发布相关按钮 — 多重判定，避免误点页面标题/导航
+        # 核心：必须是 button 标签 或 有 button-like 视觉特征（实色背景 + cursor:pointer）
         find_btn_js = """(keywords) => {
-            const vh = window.innerHeight;
-            const minY = vh * 0.25;   // 跳过顶部 25%
-            const minX = 200;          // 跳过左侧 sidebar
+            const results = [];
+            // 只扫真按钮：button / role=button / 含 btn 类名 / 含 cursor:pointer 的可点元素
+            const sel = 'button, [role="button"], [class*="btn"], [class*="Btn"], [class*="button"], [class*="Button"], [class*="publish"], [class*="submit"]';
             for (const kw of keywords) {
-                for (const el of document.querySelectorAll('button, div, span')) {
-                    if (el.offsetParent === null) continue;
+                for (const el of document.querySelectorAll(sel)) {
                     if (el.disabled) continue;
-                    const cls = el.className || '';
-                    if (typeof cls === 'string' && cls.includes('disabled')) continue;
+                    const cls = (typeof el.className === 'string') ? el.className : '';
+                    if (cls.includes('disabled') || cls.includes('--disabled')) continue;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) < 0.3) continue;
+                    if (st.pointerEvents === 'none') continue;
                     const t = (el.textContent || '').trim();
-                    // 严格相等，避免误匹配（'发布笔记' 不会匹配到 '+ 发布笔记'）
                     if (t !== kw) continue;
+
+                    // 文字外观不应该像标题：H1~H6 / role=heading 直接排除
+                    if (/^H[1-6]$/.test(el.tagName) || el.getAttribute('role') === 'heading') continue;
+                    // 父级若是 heading/title 也排除
+                    let p = el.parentElement, isInTitle = false;
+                    for (let i = 0; p && i < 3; i++, p = p.parentElement) {
+                        const pcls = (typeof p.className === 'string') ? p.className.toLowerCase() : '';
+                        if (pcls.includes('title') || pcls.includes('header') || pcls.includes('breadcrumb') || pcls.includes('tab-bar')) { isInTitle = true; break; }
+                        if (/^H[1-6]$/.test(p.tagName)) { isInTitle = true; break; }
+                    }
+                    if (isInTitle) continue;
+
+                    // 按钮形状：必须有合理宽高
+                    const r0 = el.getBoundingClientRect();
+                    if (r0.width < 60 || r0.height < 28 || r0.height > 70) continue;
+                    // 字号约束：按钮文字一般 12~18px，标题文字往往 ≥20px
+                    const fs = parseFloat(st.fontSize) || 14;
+                    if (fs > 19) continue;
+
+                    // 按钮视觉特征：button 标签 或 有实色背景
+                    const isBtnTag = el.tagName === 'BUTTON' || el.getAttribute('role') === 'button';
+                    const bg = st.backgroundColor || '';
+                    const hasSolidBg = bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent' && !bg.startsWith('rgba(0, 0, 0, 0)');
+                    const hasBtnClass = /\\bbtn\\b|\\bbutton\\b|publish|submit/i.test(cls);
+                    if (!isBtnTag && !hasSolidBg && !hasBtnClass) continue;
+
+                    // 滚到中央并回算坐标
+                    try { el.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'}); } catch(e) {}
                     const r = el.getBoundingClientRect();
-                    if (r.width < 30 || r.height < 20) continue;
-                    if (r.top < minY) continue;
-                    if (r.left < minX) continue;
-                    return {x: r.left + r.width/2, y: r.top + r.height/2, text: t};
+                    const vh = window.innerHeight, vw = window.innerWidth;
+                    if (r.top < 40 || r.bottom > vh + 5) continue;  // 滚动后仍在顶部 = sticky 标题，跳过
+                    if (r.left < 0 || r.right > vw + 5) continue;
+
+                    results.push({
+                        x: r.left + r.width/2,
+                        y: r.top + r.height/2,
+                        text: t,
+                        kw: kw,
+                        // 评分：真按钮标签 + 大宽度 + 偏下 优先
+                        score: (isBtnTag ? 100 : 0) + (hasSolidBg ? 50 : 0) + r.width * 0.1 + r.top * 0.05,
+                    });
+                }
+                if (results.length) {
+                    // 同一关键字下选评分最高
+                    results.sort((a, b) => b.score - a.score);
+                    return results[0];
                 }
             }
             return null;
         }"""
 
         # 推进步骤先（一键排版/下一步），最后才是发布（避免误点 sidebar）
+        # 注意：XHS 发布页底部按钮就叫"发布"两个字，'发布笔记'是页面顶部标题，必须排除！
         secondary = ['一键排版', '下一步', '继续', '提交']
-        primary = ['立即发布', '确认发布', '发布', '发布笔记']
+        primary = ['发布', '立即发布', '确认发布']
         all_kw = secondary + primary
+
+        # 先滚到底（发布按钮一定在底部）
+        try:
+            self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        except Exception:
+            pass
+        self._sleep(1)
+
+        # 诊断 + 直接定位：扫所有红色背景的元素（XHS 品牌红 ≈ rgb(255, 36, 66)）
+        # 这是发布按钮最可靠的视觉特征，与 textContent 无关
+        try:
+            red_btns = self.page.evaluate(r"""() => {
+                const out = [];
+                for (const el of document.querySelectorAll('*')) {
+                    const st = window.getComputedStyle(el);
+                    const bg = st.backgroundColor || '';
+                    const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+                    if (!m) continue;
+                    const r = parseInt(m[1]), g = parseInt(m[2]), b = parseInt(m[3]);
+                    // XHS 红色: R 高、G 低、B 低
+                    if (r < 200 || g > 120 || b > 120) continue;
+                    if (st.display === 'none' || st.visibility === 'hidden') continue;
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width < 50 || rect.height < 24) continue;
+                    if (rect.width > 400 || rect.height > 100) continue;
+                    // 跳过过大的红色区域（可能是 banner）
+                    if (rect.width * rect.height > 30000) continue;
+                    out.push({
+                        tag: el.tagName,
+                        cls: (typeof el.className === 'string' ? el.className : '').slice(0, 80),
+                        text: ((el.textContent || '').trim() ||
+                               el.getAttribute('aria-label') ||
+                               el.getAttribute('title') || '<no-text>').slice(0, 30),
+                        x: Math.round(rect.left), y: Math.round(rect.top),
+                        w: Math.round(rect.width), h: Math.round(rect.height),
+                        bg: bg, cursor: st.cursor,
+                    });
+                    if (out.length > 20) break;
+                }
+                return out;
+            }""")
+            self.log(f"  [dbg] 红色按钮候选 {len(red_btns)} 个:")
+            for d in red_btns:
+                self.log(f"    - <{d['tag']}.{d['cls'][:40]}> '{d['text']}' "
+                         f"@({d['x']},{d['y']}) {d['w']}x{d['h']} cursor={d['cursor']}")
+        except Exception as e:
+            self.log(f"  [dbg] 红色按钮扫描失败: {e}")
+            red_btns = []
 
         published = False
         last_clicked = ""
-        for step in range(5):  # 最多 5 步
+
+        # 优先策略：Playwright locator + scroll_into_view_if_needed + click
+        # Playwright 的 click 自带 auto-wait 和 auto-scroll，比 mouse.click 鲁棒得多
+        def _try_playwright_click(kw):
+            """尝试用 Playwright locator 点击关键字按钮，自动滚动+点击。"""
+            # 多个选择器策略，按优先级排序
+            selectors = [
+                f'button:text-is("{kw}"):not([disabled])',
+                f'div[role="button"]:text-is("{kw}")',
+                f'[class*="submit"]:text-is("{kw}")',
+                f'[class*="publish"]:text-is("{kw}")',
+                f'button:has-text("{kw}"):not([disabled])',
+            ]
+            for sel in selectors:
+                try:
+                    loc = self.page.locator(sel)
+                    n = loc.count()
+                    if n == 0:
+                        continue
+                    # 优先选最靠下（底部主操作按钮通常在页面底部）
+                    # 也排除字号 > 18px 的（标题）
+                    best_idx = -1
+                    best_y = -1
+                    for i in range(n):
+                        el = loc.nth(i)
+                        try:
+                            if not el.is_visible(timeout=300):
+                                continue
+                            box = el.bounding_box(timeout=500)
+                            if not box or box["width"] < 50 or box["height"] < 24 or box["height"] > 70:
+                                continue
+                            # 排除标题字号
+                            fs = el.evaluate("e => parseFloat(window.getComputedStyle(e).fontSize)")
+                            if fs and fs > 19:
+                                continue
+                            # 排除顶部 100px 的元素（一般是标题/导航）
+                            if box["y"] < 100:
+                                continue
+                            if box["y"] > best_y:
+                                best_y = box["y"]
+                                best_idx = i
+                        except Exception:
+                            continue
+                    if best_idx < 0:
+                        continue
+                    el = loc.nth(best_idx)
+                    el.scroll_into_view_if_needed(timeout=3000)
+                    self._sleep(random.uniform(0.4, 0.8))
+                    box = el.bounding_box(timeout=1000)
+                    self.log(f"  → 点[{kw}] via locator {sel[:40]}... @"
+                             f"({int(box['x']+box['width']/2)},{int(box['y']+box['height']/2)})")
+                    # 用人类轨迹点击
+                    self._human_click(box["x"] + box["width"]/2,
+                                      box["y"] + box["height"]/2)
+                    return True
+                except Exception:
+                    continue
+            return None
+
+        def _try_shadow_button_click(kw):
+            """处理 <xhs-publish-btn> 闭合 Shadow DOM 按钮。
+            两个内部按钮各 120px，居中排列，红色发布按钮中心 = host中心 + 70px"""
+            try:
+                # 1) get_by_role 走无障碍树，能穿透闭合 Shadow DOM（成功率高）
+                try:
+                    el = self.page.get_by_role("button", name=kw).last
+                    if el.is_visible(timeout=800):
+                        el.scroll_into_view_if_needed(timeout=2000)
+                        self._sleep(random.uniform(0.4, 0.7))
+                        box = el.bounding_box(timeout=1000)
+                        if box and box["width"] >= 50 and box["width"] <= 200:
+                            self.log(f"  → [role] 点'{kw}' @"
+                                     f"({int(box['x']+box['width']/2)},{int(box['y']+box['height']/2)}) "
+                                     f"size={int(box['width'])}x{int(box['height'])}")
+                            self._human_click(box["x"] + box["width"]/2,
+                                              box["y"] + box["height"]/2)
+                            return True
+                except Exception:
+                    pass
+
+                # 2) 找 <xhs-publish-btn> 容器，用 host中心+70px 定位红色按钮
+                if kw in primary:
+                    try:
+                        host = self.page.locator(
+                            'xhs-publish-btn[submit-text="发布"], xhs-publish-btn[is-publish="true"]'
+                        ).first
+                        if host.count() > 0 and host.is_visible(timeout=800):
+                            host.scroll_into_view_if_needed(timeout=2000)
+                            self._sleep(random.uniform(0.4, 0.7))
+                            box = host.bounding_box(timeout=1000)
+                            if box:
+                                self.log(f"  [dbg] xhs-publish-btn box: "
+                                         f"x={int(box['x'])} y={int(box['y'])} "
+                                         f"w={int(box['width'])} h={int(box['height'])}")
+                                # 内部 2 个 button 各 120px 居中排列，gap≈12px
+                                # 发布(红)在右，其中心相对host中心偏右 60+6=66px
+                                cx = box["x"] + box["width"] / 2 + 66
+                                cy = box["y"] + box["height"] / 2
+                                self.log(f"  → [shadow-host] 点 红色发布按钮中心 @({int(cx)},{int(cy)})")
+                                self._human_click(cx, cy)
+                                # 第二次保险点（部分布局 gap 不同）
+                                self._sleep(0.3)
+                                return True
+                    except Exception as e:
+                        self.log(f"  [dbg] shadow-host 失败: {e}")
+
+                # 3) 终极兜底：用 JS 在 host 元素上 dispatchEvent 触发组件内部逻辑
+                if kw in primary:
+                    try:
+                        ok = self.page.evaluate(r"""() => {
+                            const host = document.querySelector(
+                                'xhs-publish-btn[submit-text="发布"], xhs-publish-btn[is-publish="true"]'
+                            );
+                            if (!host) return false;
+                            // 尝试访问闭合 shadow root（部分实现会暴露 _shadowRoot 或 __vue__）
+                            const root = host.shadowRoot || host._shadowRoot || null;
+                            if (root) {
+                                const btn = root.querySelector('button.bg-red, button.ce-btn.bg-red');
+                                if (btn) {
+                                    btn.click();
+                                    return true;
+                                }
+                            }
+                            // 没有暴露 shadow root：直接派发 click 到 host 中心+offset
+                            const rect = host.getBoundingClientRect();
+                            const cx = rect.left + rect.width/2 + 66;
+                            const cy = rect.top + rect.height/2;
+                            // 创建 mouse 事件序列
+                            for (const type of ['mousedown', 'mouseup', 'click']) {
+                                const ev = new MouseEvent(type, {
+                                    bubbles: true, cancelable: true, composed: true,
+                                    clientX: cx, clientY: cy, button: 0,
+                                });
+                                document.elementFromPoint(cx, cy)?.dispatchEvent(ev);
+                            }
+                            return true;
+                        }""")
+                        if ok:
+                            self.log(f"  → [js-dispatch] 触发 xhs-publish-btn 内部点击")
+                            return True
+                    except Exception as e:
+                        self.log(f"  [dbg] js-dispatch 失败: {e}")
+            except Exception:
+                pass
+            return False
+
+        def _try_red_button_click():
+            """通过 XHS 品牌红色背景定位发布按钮 — 终极兜底，不依赖文字。"""
+            try:
+                btn = self.page.evaluate(r"""() => {
+                    let best = null, bestY = -1;
+                    for (const el of document.querySelectorAll('*')) {
+                        const st = window.getComputedStyle(el);
+                        const bg = st.backgroundColor || '';
+                        const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+                        if (!m) continue;
+                        const r = parseInt(m[1]), g = parseInt(m[2]), b = parseInt(m[3]);
+                        if (r < 200 || g > 120 || b > 120) continue;
+                        if (st.display === 'none' || st.visibility === 'hidden') continue;
+                        if (st.pointerEvents === 'none') continue;
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width < 50 || rect.height < 28) continue;
+                        if (rect.width > 300 || rect.height > 80) continue;
+                        // 跳过左上角导航按钮（sidebar 选中态也可能是红的）
+                        if (rect.left < 200 && rect.top < 200) continue;
+                        // 滚到中央
+                        try { el.scrollIntoView({block: 'center', behavior: 'instant'}); } catch(e) {}
+                        const r2 = el.getBoundingClientRect();
+                        if (r2.top < 0 || r2.bottom > window.innerHeight + 10) continue;
+                        // 选 Y 最大的（最靠下，避免误点上方红色元素）
+                        if (r2.top > bestY) {
+                            bestY = r2.top;
+                            best = {x: r2.left + r2.width/2, y: r2.top + r2.height/2,
+                                    text: (el.textContent || '').trim() || '<no-text>'};
+                        }
+                    }
+                    return best;
+                }""")
+                if not btn:
+                    return None
+                self.log(f"  → 红色按钮兜底: 点 '{btn['text']}' @"
+                         f"({int(btn['x'])},{int(btn['y'])})")
+                self._human_click(btn["x"], btn["y"])
+                return btn["text"]
+            except Exception as e:
+                self.log(f"  [dbg] 红色按钮点击失败: {e}")
+                return None
+
+        for step in range(5):
             self._check_stop()
-            # 每一步最多轮询 18 秒等待按钮出现（排版/预览页加载较慢）
-            btn = None
+            # 先滚到底（发布按钮通常在底部）
+            try:
+                self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            except Exception:
+                pass
+            self._sleep(random.uniform(0.6, 1.2))
+
+            clicked_kw = None
             poll_end = time.time() + 18
             while time.time() < poll_end:
                 self._check_stop()
-                btn = self.page.evaluate(find_btn_js, all_kw)
-                if btn:
-                    # 避免连续点击同一按钮（防止页面卡住时反复点）
-                    if btn["text"] != last_clicked:
+                # ① 最高优先：Shadow DOM 容器（XHS 真实发布按钮在闭合 Shadow Root 里）
+                for kw in primary:
+                    if kw == last_clicked:
+                        continue
+                    if _try_shadow_button_click(kw):
+                        clicked_kw = kw
                         break
+                if clicked_kw:
+                    break
+                # ② 次优先：常规 Playwright locator（推进按钮+其它发布关键字）
+                for kw in all_kw:
+                    if kw == last_clicked:
+                        continue
+                    if _try_playwright_click(kw):
+                        clicked_kw = kw
+                        break
+                if clicked_kw:
+                    break
                 self._sleep(1)
-            if not btn:
+
+            # ③ 文字全失败 → 红色背景兜底
+            if not clicked_kw:
+                self.log(f"  ⚠ 第{step+1}步: 文字未匹配，尝试红色按钮兜底")
+                red_text = _try_red_button_click()
+                if red_text:
+                    clicked_kw = red_text if red_text in primary else "发布"
+                    try:
+                        self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    except Exception:
+                        pass
+
+            if not clicked_kw:
                 self.log(f"  ⚠ 第{step+1}步: 等18s仍未找到可点按钮")
                 break
-            text = btn["text"]
-            is_final = any(text == k or text.endswith(k) for k in primary)
-            self.log(f"  → 第{step+1}步: 点[{text}] @ ({int(btn['x'])},{int(btn['y'])})")
-            last_clicked = text
-            try:
-                self.page.mouse.click(btn["x"], btn["y"])
-            except Exception as e:
-                self.log(f"  ⚠ 点击失败: {e}")
-                break
-            self._sleep(5)  # 排版页要加载，留点时间
+            last_clicked = clicked_kw
+            is_final = (clicked_kw in primary) or (clicked_kw == "发布")
+            self._sleep(5)
 
             # 检查发布成功
             try:
@@ -2061,34 +2541,26 @@ class XHSScraper:
             except Exception:
                 pass
 
-            # 如果刚点的是真发布按钮，再多等并确认
             if is_final:
                 self._sleep(3)
                 try:
-                    if self.page.locator("text=发布成功").first.is_visible(timeout=4000):
+                    if self.page.locator("text=发布成功").first.is_visible(timeout=5000):
                         self.log("  ✓ 发布成功")
                         return True
                 except Exception:
                     pass
-                self.log("  ✓ 已点最终发布按钮（未抓到成功提示但应该成了）")
-                published = True
-                break
-
-        if not published:
-            # 兜底: Playwright locator 直接点
-            for sel in [
-                'button:has-text("发布"):not([disabled])',
-                'button:has-text("立即发布"):not([disabled])',
-                'button:has-text("下一步"):not([disabled])',
-            ]:
+                # 检查 URL 是否跳走（成功后通常跳转到管理页）
                 try:
-                    el = self.page.locator(sel).first
-                    if el.is_visible(timeout=1500):
-                        el.click(timeout=3000)
+                    cur_url = self.page.url
+                    if "publish" not in cur_url:
+                        self.log(f"  ✓ 发布后跳转: {cur_url[:70]}")
                         published = True
                         break
                 except Exception:
-                    continue
+                    pass
+                self.log("  ✓ 已点最终发布按钮（未抓到成功提示）")
+                published = True
+                break
 
         if not published:
             raise RuntimeError("找不到发布按钮（DOM 可能变了）")

@@ -32,8 +32,50 @@ PLAN_DAYS = {
     "quarter": 90, "year": 365,
 }
 
+# 短时长试用套餐：以秒为单位
+PLAN_SECONDS = {
+    "trial_5min":  5 * 60,
+    "trial_15min": 15 * 60,
+    "trial_30min": 30 * 60,
+    "trial_1h":    60 * 60,
+    "trial_3h":    3 * 60 * 60,
+    "trial_6h":    6 * 60 * 60,
+}
+
+# 中文展示名（admin UI 用）
+PLAN_LABELS = {
+    "trial_5min":  "5分钟试用",
+    "trial_15min": "15分钟试用",
+    "trial_30min": "30分钟试用",
+    "trial_1h":    "1小时试用",
+    "trial_3h":    "3小时试用",
+    "trial_6h":    "6小时试用",
+    "day":         "日卡 (1天)",
+    "week":        "周卡 (7天)",
+    "month":       "月卡 (30天)",
+    "quarter":     "季卡 (90天)",
+    "year":        "年卡 (365天)",
+}
+
+
+def plan_duration_seconds(plan, custom_seconds=None):
+    """统一计算套餐时长（秒）"""
+    if plan == "custom" and custom_seconds:
+        return max(60, int(custom_seconds))  # 最少 1 分钟
+    if plan in PLAN_SECONDS:
+        return PLAN_SECONDS[plan]
+    if plan in PLAN_DAYS:
+        return PLAN_DAYS[plan] * 86400
+    return 0
+
+
+def is_valid_plan(plan):
+    return plan in PLAN_DAYS or plan in PLAN_SECONDS or plan == "custom"
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET", secrets.token_hex(32))
+# 上传 exe 文件大小限制：默认 500MB，可通过环境变量调整
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "500")) * 1024 * 1024
 
 
 def init_db():
@@ -47,8 +89,16 @@ def init_db():
         expires_at INTEGER,
         status TEXT DEFAULT 'unused',
         note TEXT,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        duration_seconds INTEGER DEFAULT 0
     )""")
+    # 迁移：旧库没有 duration_seconds 列时补上
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(keys)").fetchall()]
+        if "duration_seconds" not in cols:
+            conn.execute("ALTER TABLE keys ADD COLUMN duration_seconds INTEGER DEFAULT 0")
+    except Exception:
+        pass
     conn.execute("""CREATE TABLE IF NOT EXISTS announces (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
@@ -211,7 +261,13 @@ def activate():
         record_client_heartbeat(mid, key, row["plan"], version, os_info)
         return jsonify(ok=True, expires_at=row["expires_at"], plan=row["plan"])
     now = int(time.time())
-    expires = now + row["days"] * 86400
+    # 秒级时长优先（试用卡密），否则用天数
+    try:
+        ds = row["duration_seconds"]
+    except (KeyError, IndexError):
+        ds = 0
+    duration = ds if ds and ds > 0 else (row["days"] * 86400)
+    expires = now + duration
     conn.execute(
         "UPDATE keys SET machine_id=?, activated_at=?, expires_at=?, status='used' WHERE key=?",
         (mid, now, expires, key),
@@ -390,21 +446,27 @@ def admin_create():
     plan = body.get("plan", "month")
     count = int(body.get("count", 1))
     note = body.get("note", "")
-    if plan not in PLAN_DAYS:
+    custom_seconds = body.get("custom_seconds")
+    if not is_valid_plan(plan):
         return jsonify(ok=False, msg="无效套餐"), 400
-    days = PLAN_DAYS[plan]
+    duration_sec = plan_duration_seconds(plan, custom_seconds)
+    if duration_sec <= 0:
+        return jsonify(ok=False, msg="时长无效"), 400
+    days = max(1, duration_sec // 86400)  # 兼容旧列，至少 1
     now = int(time.time())
     conn = get_conn()
     keys = []
     for _ in range(max(1, min(count, 500))):
         k = gen_key()
         conn.execute(
-            "INSERT INTO keys(key,plan,days,note,created_at) VALUES(?,?,?,?,?)",
-            (k, plan, days, note, now),
+            "INSERT INTO keys(key,plan,days,note,created_at,duration_seconds) "
+            "VALUES(?,?,?,?,?,?)",
+            (k, plan, days, note, now, duration_sec),
         )
         keys.append(k)
     conn.commit()
-    return jsonify(ok=True, keys=keys, plan=plan, days=days)
+    return jsonify(ok=True, keys=keys, plan=plan,
+                   duration_seconds=duration_sec, days=days)
 
 
 @app.route("/admin/list", methods=["GET"])
@@ -574,20 +636,44 @@ def admin_api_keys_create():
     plan = body.get("plan", "month")
     count = int(body.get("count", 1))
     note = body.get("note", "")
-    if plan not in PLAN_DAYS:
+    custom_seconds = body.get("custom_seconds")
+    if not is_valid_plan(plan):
         return jsonify(ok=False, msg="无效套餐"), 400
-    days = PLAN_DAYS[plan]
+    duration_sec = plan_duration_seconds(plan, custom_seconds)
+    if duration_sec <= 0:
+        return jsonify(ok=False, msg="时长无效"), 400
+    days = max(1, duration_sec // 86400)
     now = int(time.time())
     conn = get_conn()
     keys = []
     for _ in range(max(1, min(count, 500))):
         k = gen_key()
         conn.execute(
-            "INSERT INTO keys(key,plan,days,note,created_at) VALUES(?,?,?,?,?)",
-            (k, plan, days, note, now))
+            "INSERT INTO keys(key,plan,days,note,created_at,duration_seconds) "
+            "VALUES(?,?,?,?,?,?)",
+            (k, plan, days, note, now, duration_sec))
         keys.append(k)
     conn.commit()
-    return jsonify(ok=True, keys=keys)
+    return jsonify(ok=True, keys=keys, duration_seconds=duration_sec)
+
+
+@app.route("/admin/api/plans", methods=["GET"])
+def admin_api_plans():
+    """前端获取套餐选项列表"""
+    fail = _need_api_login()
+    if fail: return fail
+    items = []
+    # 试用套餐放最上面
+    for k in ["trial_5min", "trial_15min", "trial_30min",
+              "trial_1h", "trial_3h", "trial_6h"]:
+        items.append({"value": k, "label": PLAN_LABELS[k],
+                      "seconds": PLAN_SECONDS[k], "is_trial": True})
+    for k in ["day", "week", "month", "quarter", "year"]:
+        items.append({"value": k, "label": PLAN_LABELS[k],
+                      "seconds": PLAN_DAYS[k] * 86400, "is_trial": False})
+    items.append({"value": "custom", "label": "🛠 自定义时长",
+                  "seconds": 0, "is_trial": False})
+    return jsonify(ok=True, plans=items)
 
 
 @app.route("/admin/api/keys/revoke", methods=["POST"])

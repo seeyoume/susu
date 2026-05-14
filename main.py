@@ -14,8 +14,8 @@ from tkinter import messagebox, simpledialog, ttk
 
 # 跨平台字体：Windows 用微软雅黑 / Mac 用 PingFang SC / 其余用系统默认
 _SYS = _platform.system()
-FONT_UI   = "PingFang SC"  if _SYS == "Darwin" else FONT_UI
-FONT_MONO = "Menlo"        if _SYS == "Darwin" else FONT_MONO
+FONT_UI   = "PingFang SC"   if _SYS == "Darwin" else "Microsoft YaHei"
+FONT_MONO = "Menlo"         if _SYS == "Darwin" else "Consolas"
 
 from scraper import (ACCOUNTS_DIR, list_accounts, get_proxy, set_proxy,
                      parse_proxy, get_account_meta, fetch_proxy_pool)
@@ -2911,8 +2911,8 @@ class App:
             nid = r.get("note_id", "")
             self.log(acc, f"  [{i}/{total}] 采详情: {nid}")
             try:
-                detail = scraper.fetch_note_detail(r.get("url") or nid,
-                                                   want_comments=False)
+                detail, _ = scraper.fetch_note_detail(r.get("url") or nid,
+                                                     want_comments=False)
             except Exception as e:
                 self.log(acc, f"    ✗ 详情失败: {e}")
                 continue
@@ -2922,11 +2922,12 @@ class App:
                 continue
             # 下载图片
             try:
-                saved = scraper.download_media(detail, media_root)
+                saved_folder = scraper.download_media(detail, media_root)
             except Exception as e:
                 self.log(acc, f"    ✗ 下载失败: {e}")
                 continue
-            img_paths = [p for p in saved if not p.endswith(".mp4")]
+            img_paths = [str(p) for p in saved_folder.iterdir()
+                         if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")]
             if not img_paths:
                 self.log(acc, "    ✗ 该笔记无可用图片，跳过")
                 continue

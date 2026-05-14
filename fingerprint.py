@@ -125,6 +125,16 @@ def make_init_script(fp):
         f'{{"brand":"Not-A.Brand","version":"99"}}]'
     )
 
+    # 用账号名哈希生成稳定但独特的 canvas/audio 噪声种子
+    import hashlib as _hl
+    _seed_hex = _hl.md5(ua.encode()).hexdigest()[:8]
+    canvas_r = int(_seed_hex[0:2], 16)      # 0-255
+    canvas_g = int(_seed_hex[2:4], 16)
+    canvas_b = int(_seed_hex[4:6], 16)
+    audio_shift = round(1e-6 + int(_seed_hex[6:8], 16) * 3e-9, 12)  # 极小偏移
+    avail_w = fp.get("viewport", {}).get("width", 1920) - random.randint(0, 2)
+    avail_h = fp.get("viewport", {}).get("height", 1080) - random.randint(40, 48)  # 任务栏
+
     return f"""
 (() => {{
     // ── 基础属性 ──────────────────────────────────────────────────
@@ -134,12 +144,15 @@ def make_init_script(fp):
         def(navigator, 'deviceMemory', {mem});
         def(navigator, 'platform', {json.dumps(platform)});
         def(navigator, 'languages', [{json.dumps(locale)}, "zh", "en"]);
+        def(navigator, 'maxTouchPoints', 0);
         def(screen, 'colorDepth', {color_depth});
         def(screen, 'pixelDepth', {color_depth});
+        def(screen, 'availWidth',  {avail_w});
+        def(screen, 'availHeight', {avail_h});
 
         // ① webdriver 完全抹除
+        try {{ delete navigator.__proto__.webdriver; }} catch(e) {{}}
         def(navigator, 'webdriver', undefined);
-        delete navigator.__proto__.webdriver;
 
         // ② navigator.plugins：真实 Chrome 至少有 3 个 plugin
         const fakePDF = {{
@@ -197,7 +210,7 @@ def make_init_script(fp):
             }};
         }}
 
-        // ⑤ Navigator.userAgentData（Client Hints API，比较新的检测点）
+        // ⑤ Navigator.userAgentData（Client Hints API）
         try {{
             const brands = {brand_list};
             const uaData = {{
@@ -221,20 +234,65 @@ def make_init_script(fp):
 
         // ⑥ WebGL vendor/renderer 覆盖（防 SwiftShader / ANGLE 泄露）
         try {{
-            const getCtx = HTMLCanvasElement.prototype.getContext;
+            const _getCtx = HTMLCanvasElement.prototype.getContext;
             HTMLCanvasElement.prototype.getContext = function(type, ...args) {{
-                const ctx = getCtx.call(this, type, ...args);
+                const ctx = _getCtx.call(this, type, ...args);
                 if (!ctx) return ctx;
                 if (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') {{
-                    const origGetParam = ctx.getParameter.bind(ctx);
+                    const _orig = ctx.getParameter.bind(ctx);
                     ctx.getParameter = function(param) {{
-                        if (param === 37445) return 'Intel Inc.';               // UNMASKED_VENDOR
-                        if (param === 37446) return 'Intel Iris OpenGL Engine'; // UNMASKED_RENDERER
-                        return origGetParam(param);
+                        if (param === 37445) return 'Intel Inc.';
+                        if (param === 37446) return 'Intel Iris OpenGL Engine';
+                        return _orig(param);
                     }};
                 }}
                 return ctx;
             }};
+        }} catch(e) {{}}
+
+        // ⑦ Canvas 2D 指纹噪声（每个账号稳定但唯一的像素偏移）
+        try {{
+            const _toDataURL = HTMLCanvasElement.prototype.toDataURL;
+            const _getImageData = CanvasRenderingContext2D.prototype.getImageData;
+            const _noise = [{canvas_r}, {canvas_g}, {canvas_b}];
+            HTMLCanvasElement.prototype.toDataURL = function(...args) {{
+                const ctx2d = this.getContext('2d');
+                if (ctx2d) {{
+                    const w = this.width, h = this.height;
+                    if (w > 0 && h > 0) {{
+                        const id = ctx2d.getImageData(0, 0, 1, 1);
+                        // 仅对像素 (0,0) 微调，视觉无感
+                        id.data[0] = (id.data[0] + _noise[0]) & 0xff;
+                        id.data[1] = (id.data[1] + _noise[1]) & 0xff;
+                        id.data[2] = (id.data[2] + _noise[2]) & 0xff;
+                        ctx2d.putImageData(id, 0, 0);
+                    }}
+                }}
+                return _toDataURL.apply(this, args);
+            }};
+        }} catch(e) {{}}
+
+        // ⑧ AudioContext 指纹噪声（极小偏移，改变 getChannelData 输出）
+        try {{
+            const _AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (_AudioContext) {{
+                const _getChData = AudioBuffer.prototype.getChannelData;
+                AudioBuffer.prototype.getChannelData = function(channel) {{
+                    const arr = _getChData.call(this, channel);
+                    // 仅改首尾两个采样，幅度在 1e-9 量级，听觉完全无感
+                    if (arr.length > 2) {{
+                        arr[0] += {audio_shift};
+                        arr[arr.length - 1] -= {audio_shift};
+                    }}
+                    return arr;
+                }};
+            }}
+        }} catch(e) {{}}
+
+        // ⑨ document.visibilityState 始终 'visible'（防后台检测）
+        try {{
+            Object.defineProperty(document, 'visibilityState', {{get: () => 'visible'}});
+            Object.defineProperty(document, 'hidden', {{get: () => false}});
         }} catch(e) {{}}
 
     }} catch (e) {{}}

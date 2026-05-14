@@ -79,13 +79,34 @@ button.ghost:hover{background:#30363d}
   <div class="panel">
     <h3 style="margin-top:0">生成卡密</h3>
     <div class="flex">
-      <select id="gen-plan">
-        <option value="day">日卡 (1天)</option>
-        <option value="week">周卡 (7天)</option>
-        <option value="month" selected>月卡 (30天)</option>
-        <option value="quarter">季卡 (90天)</option>
-        <option value="year">年卡 (365天)</option>
+      <select id="gen-plan" onchange="onPlanChange()">
+        <optgroup label="🎁 试用卡密">
+          <option value="trial_5min">5分钟试用</option>
+          <option value="trial_15min">15分钟试用</option>
+          <option value="trial_30min">30分钟试用</option>
+          <option value="trial_1h">1小时试用</option>
+          <option value="trial_3h">3小时试用</option>
+          <option value="trial_6h">6小时试用</option>
+        </optgroup>
+        <optgroup label="💎 正式卡密">
+          <option value="day">日卡 (1天)</option>
+          <option value="week">周卡 (7天)</option>
+          <option value="month" selected>月卡 (30天)</option>
+          <option value="quarter">季卡 (90天)</option>
+          <option value="year">年卡 (365天)</option>
+        </optgroup>
+        <optgroup label="🛠 自定义">
+          <option value="custom">自定义时长</option>
+        </optgroup>
       </select>
+      <span id="custom-wrap" style="display:none">
+        <input id="custom-num" type="number" value="30" min="1" style="width:70px">
+        <select id="custom-unit" style="width:75px">
+          <option value="60">分钟</option>
+          <option value="3600">小时</option>
+          <option value="86400">天</option>
+        </select>
+      </span>
       <input id="gen-count" type="number" value="1" min="1" max="500" style="width:80px"> 张
       <input id="gen-note" placeholder="备注（如客户名）" style="width:200px">
       <button onclick="genKeys()">📤 生成</button>
@@ -524,18 +545,39 @@ async function loadKeys() {
   }
 }
 
+function onPlanChange() {
+  const plan = document.getElementById('gen-plan').value;
+  document.getElementById('custom-wrap').style.display =
+    (plan === 'custom') ? 'inline' : 'none';
+}
+
 async function genKeys() {
   const plan = document.getElementById('gen-plan').value;
   const count = parseInt(document.getElementById('gen-count').value);
   const note = document.getElementById('gen-note').value;
+  const payload = {plan, count, note};
+  if (plan === 'custom') {
+    const num = parseInt(document.getElementById('custom-num').value);
+    const unit = parseInt(document.getElementById('custom-unit').value);
+    if (!num || num < 1) {
+      document.getElementById('gen-result').innerHTML =
+        '<span style="color:#f85149">✗ 自定义时长无效</span>';
+      return;
+    }
+    payload.custom_seconds = num * unit;
+  }
   const r = await api('/keys/create', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({plan, count, note})
+    body: JSON.stringify(payload)
   });
   const out = document.getElementById('gen-result');
   if (r.ok) {
-    out.innerHTML = '<strong style="color:#7ee787">✓ 已生成:</strong><br>'
+    const dur = r.duration_seconds || 0;
+    const durLabel = dur < 3600 ? Math.round(dur/60) + '分钟'
+                   : dur < 86400 ? Math.round(dur/3600) + '小时'
+                   : Math.round(dur/86400) + '天';
+    out.innerHTML = `<strong style="color:#7ee787">✓ 已生成 (时长: ${durLabel}):</strong><br>`
       + r.keys.map(k => `<span class="copy" onclick="copy('${k}')">${k}</span>`).join('<br>');
     loadKeys();
     loadStats();

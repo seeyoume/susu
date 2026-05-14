@@ -17,11 +17,22 @@ def _req(server, path, token, method="GET", body=None):
 
 
 def cmd_create(args):
-    r = _req(args.server, "/admin/create", args.token, "POST",
-             {"plan": args.plan, "count": args.count, "note": args.note})
+    payload = {"plan": args.plan, "count": args.count, "note": args.note}
+    if args.plan == "custom":
+        if not args.seconds:
+            print("✗ --plan custom 必须配合 --seconds 使用"); sys.exit(1)
+        payload["custom_seconds"] = args.seconds
+    r = _req(args.server, "/admin/create", args.token, "POST", payload)
     if not r.get("ok"):
         print("✗ 失败:", r.get("msg")); sys.exit(1)
-    print(f"✓ 已生成 {len(r['keys'])} 张 {args.plan} 卡密 ({r['days']} 天):")
+    ds = r.get("duration_seconds", 0)
+    if ds < 3600:
+        dur_label = f"{ds//60} 分钟"
+    elif ds < 86400:
+        dur_label = f"{ds//3600} 小时"
+    else:
+        dur_label = f"{ds//86400} 天"
+    print(f"✓ 已生成 {len(r['keys'])} 张 {args.plan} 卡密 (时长 {dur_label}):")
     print()
     for k in r["keys"]:
         print(f"  {k}")
@@ -63,9 +74,16 @@ def main():
     sp = p.add_subparsers(dest="cmd", required=True)
 
     pc = sp.add_parser("create", help="生成卡密")
-    pc.add_argument("--plan", choices=["day", "week", "month", "quarter", "year"], required=True)
+    pc.add_argument("--plan", choices=[
+        "trial_5min", "trial_15min", "trial_30min",
+        "trial_1h", "trial_3h", "trial_6h",
+        "day", "week", "month", "quarter", "year",
+        "custom",
+    ], required=True)
     pc.add_argument("--count", type=int, default=1)
     pc.add_argument("--note", default="")
+    pc.add_argument("--seconds", type=int, default=0,
+                    help="自定义时长（秒）；--plan custom 时必填")
     pc.set_defaults(func=cmd_create)
 
     pl = sp.add_parser("list", help="列出卡密")
