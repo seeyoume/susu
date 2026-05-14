@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"><title>绮绮采集器 - 管理后台登录</title>
+<style>
+body{font-family:"Microsoft YaHei",sans-serif;background:#1e2329;color:#fff;
+     display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+.box{background:#0d1117;padding:40px;border-radius:8px;width:380px}
+h1{margin:0 0 8px;font-size:24px}
+.sub{color:#8b949e;font-size:13px;margin-bottom:20px}
+input{width:100%;padding:10px;background:#21262d;border:1px solid #30363d;color:#fff;
+      border-radius:4px;font-family:Consolas;box-sizing:border-box;margin-bottom:12px}
+button{width:100%;padding:10px;background:#238636;border:0;color:#fff;
+       border-radius:4px;cursor:pointer;font-size:14px}
+button:hover{background:#2ea043}
+.err{color:#f85149;font-size:13px;margin-top:8px}
+</style></head>
+<body><div class="box">
+<h1>🛡 绮绮采集器</h1>
+<div class="sub">管理后台登录</div>
+<form method="POST" action="/admin/login">
+<input type="password" name="token" placeholder="ADMIN_TOKEN" autofocus>
+<button type="submit">登录</button>
+{% if err %}<div class="err">{{ err }}</div>{% endif %}
+</form>
+</div></body></html>

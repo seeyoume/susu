@@ -1,0 +1,124 @@
+name: Build Mac App
+
+# 触发方式：手动点击 Run workflow 按钮，或推送 tag
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (如 2.5.1)'
+        required: false
+        default: '2.5'
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-mac:
+    runs-on: macos-latest      # 免费 Apple Silicon 机器
+    timeout-minutes: 40
+
+    steps:
+      # ── 1. 拉代码 ──────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. 配置 Python 3.11 ─────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # ── 3. 安装 Node.js（用于签名服务器）────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ── 4. 安装 npm 依赖（crypto-js 等）─────────────────────────────
+      - name: Install Node modules
+        run: |
+          cd static
+          npm install --production
+          cd ..
+
+      # ── 5. 复制 node 二进制到 static/（打包进 .app）────────────────
+      - name: Copy node binary into static/
+        run: |
+          NODE_BIN=$(which node)
+          echo "Node path: $NODE_BIN"
+          cp "$NODE_BIN" static/node
+          chmod +x static/node
+          echo "static/node size: $(du -sh static/node | cut -f1)"
+
+      # ── 6. 安装 Python 依赖 ──────────────────────────────────────────
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pillow
+
+      # ── 7. 安装 Playwright Chromium ──────────────────────────────────
+      - name: Install Playwright browsers
+        run: |
+          python -m playwright install chromium
+          python -m playwright install-deps chromium || true
+
+      # ── 8. 生成 ICNS 图标 ────────────────────────────────────────────
+      - name: Generate .icns icon
+        run: |
+          if [ -f assets/logo.png ]; then
+            ICONSET=assets/logo.iconset
+            mkdir -p "$ICONSET"
+            for SIZE in 16 32 64 128 256 512; do
+              sips -z $SIZE $SIZE assets/logo.png --out "$ICONSET/icon_${SIZE}x${SIZE}.png"
+              DOUBLE=$((SIZE * 2))
+              sips -z $DOUBLE $DOUBLE assets/logo.png --out "$ICONSET/icon_${SIZE}x${SIZE}@2x.png"
+            done
+            iconutil -c icns "$ICONSET" -o assets/logo.icns
+            rm -rf "$ICONSET"
+            echo "Generated assets/logo.icns"
+          else
+            echo "No logo.png found, skipping icns generation"
+          fi
+
+      # ── 9. PyInstaller 打包 ──────────────────────────────────────────
+      - name: Build .app with PyInstaller
+        run: |
+          python -m PyInstaller --noconfirm QiQiCollector_mac.spec
+          echo "Build complete. Contents of dist/:"
+          ls -lh dist/
+
+      # ── 10. 压缩 .app 为 zip（Artifact 上传必须压缩）───────────────
+      - name: Zip .app bundle
+        run: |
+          cd dist
+          zip -r QiQiCollector_mac.zip QiQiCollector.app
+          echo "Zip size: $(du -sh QiQiCollector_mac.zip | cut -f1)"
+          cd ..
+
+      # ── 11. 上传产物（可下载 90 天）─────────────────────────────────
+      - name: Upload Mac App artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: QiQiCollector-mac-${{ github.event.inputs.version || github.ref_name }}
+          path: dist/QiQiCollector_mac.zip
+          retention-days: 90
+
+      # ── 12. 如果是 tag 推送，自动创建 Release ───────────────────────
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/QiQiCollector_mac.zip
+          name: 绮绮采集器 ${{ github.ref_name }}
+          body: |
+            ## 绮绮采集器 Mac 版 ${{ github.ref_name }}
+
+            ### 安装说明
+            1. 下载 `QiQiCollector_mac.zip` 并解压
+            2. 将 `QiQiCollector.app` 拖入 `/Applications`
+            3. 首次打开：右键点击 → 打开 → 确认打开（绕过 Gatekeeper）
+            4. 首次运行会自动下载 Chromium 浏览器（需联网，约 150MB）
+          draft: false
+          prerelease: false

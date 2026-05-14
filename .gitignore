@@ -1,0 +1,57 @@
+# Claude 本地配置（不上传）
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.spec.bak
+
+# 账号数据（隐私，不上传）
+accounts/*.json
+accounts/_scheduled.json
+!accounts/_config.json.example
+
+# 输出目录
+output/
+
+# 本地日志
+*.log
+logs/
+
+# PyInstaller 产物
+dist/
+build/
+*.spec.bak
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# 代理池缓存
+proxy_pool_cache.json
+
+# 激活/授权（每台机器不同）
+activation_cache.json
+
+# 分发包
+*.dmg
+*.exe
+
+# 研究目录（含子 git 仓库，不上传）
+sign_research/
+
+# Windows node 二进制（平台专用，不上传）
+static/node.exe
+static/node
+
+# 压缩包
+*.zip
+"server (2).zip"

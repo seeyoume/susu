@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"><title>绮绮采集器 - 管理后台</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:"Microsoft YaHei",sans-serif;background:#1e2329;color:#d4d4d4;margin:0;padding:0}
+.top{background:#0d1117;padding:12px 24px;display:flex;align-items:center;border-bottom:1px solid #30363d}
+.top h1{margin:0;font-size:18px;color:#fff;margin-right:24px}
+.top a{color:#8b949e;text-decoration:none;margin:0 12px;padding:6px 10px;border-radius:4px}
+.top a:hover{background:#21262d;color:#fff}
+.top a.active{background:#21262d;color:#7ee787}
+.top .right{margin-left:auto}
+.container{padding:24px;max-width:1300px;margin:0 auto}
+h2{color:#fff;border-bottom:1px solid #30363d;padding-bottom:8px;margin-top:0}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:24px}
+.card{background:#0d1117;padding:18px;border-radius:6px;border:1px solid #30363d}
+.card .v{font-size:28px;color:#7ee787;font-weight:bold;margin-top:4px}
+.card .l{color:#8b949e;font-size:13px}
+.panel{background:#0d1117;padding:18px;border-radius:6px;border:1px solid #30363d;margin-bottom:24px}
+table{width:100%;border-collapse:collapse;margin-top:8px}
+th{text-align:left;padding:8px;border-bottom:1px solid #30363d;color:#8b949e;font-weight:normal;font-size:13px}
+td{padding:8px;border-bottom:1px solid #21262d;font-family:Consolas;font-size:13px}
+tr:hover{background:#161b22}
+input,select,textarea{background:#0d1117;border:1px solid #30363d;color:#fff;padding:8px;
+                      border-radius:4px;font-family:Consolas;font-size:13px}
+textarea{width:100%;min-height:80px;font-family:"Microsoft YaHei"}
+button{background:#238636;border:0;color:#fff;padding:8px 16px;border-radius:4px;cursor:pointer;margin-right:6px}
+button:hover{background:#2ea043}
+button.danger{background:#a40e26}
+button.danger:hover{background:#c93b54}
+button.ghost{background:#21262d}
+button.ghost:hover{background:#30363d}
+.flex{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px}
+.tag-unused{background:#1f3a5f;color:#79c0ff}
+.tag-used{background:#1d4d2b;color:#7ee787}
+.tag-revoked{background:#3f1d1d;color:#f85149}
+.copy{cursor:pointer;color:#79c0ff}
+.copy:hover{text-decoration:underline}
+.note{color:#8b949e;font-size:12px;margin-top:6px}
+.section{display:none}
+.section.active{display:block}
+</style></head>
+<body>
+<div class="top">
+  <h1>🛡 绮绮采集器</h1>
+  <a href="#dashboard" data-tab="dashboard" class="tab active">📊 概览</a>
+  <a href="#keys" data-tab="keys" class="tab">🔑 卡密管理</a>
+  <a href="#clients" data-tab="clients" class="tab">👥 用户监控</a>
+  <a href="#aikey" data-tab="aikey" class="tab">🤖 AI 默认 Key</a>
+  <a href="#limits" data-tab="limits" class="tab">⏱ 套餐限额</a>
+  <a href="#blocked" data-tab="blocked" class="tab">🚫 封禁机器</a>
+  <a href="#releases" data-tab="releases" class="tab">🆕 版本发布</a>
+  <a href="#announce" data-tab="announce" class="tab">📢 公告</a>
+  <span class="right"><a href="/admin/logout">退出</a></span>
+</div>
+
+<div class="container">
+
+<div id="dashboard" class="section active">
+  <h2>📊 数据概览</h2>
+  <div class="cards">
+    <div class="card"><div class="l">总卡密</div><div class="v" id="stat-total">—</div></div>
+    <div class="card"><div class="l">已激活</div><div class="v" id="stat-used">—</div></div>
+    <div class="card"><div class="l">生效中</div><div class="v" id="stat-active">—</div></div>
+    <div class="card"><div class="l">未使用</div><div class="v" id="stat-unused">—</div></div>
+    <div class="card"><div class="l">已禁用</div><div class="v" id="stat-revoked">—</div></div>
+  </div>
+  <div class="panel">
+    <h2 style="margin-top:0">最近激活</h2>
+    <table id="recent"><thead><tr>
+      <th>卡密</th><th>套餐</th><th>机器ID</th><th>激活时间</th><th>到期</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+</div>
+
+<div id="keys" class="section">
+  <h2>🔑 卡密管理</h2>
+  <div class="panel">
+    <h3 style="margin-top:0">生成卡密</h3>
+    <div class="flex">
+      <select id="gen-plan">
+        <option value="day">日卡 (1天)</option>
+        <option value="week">周卡 (7天)</option>
+        <option value="month" selected>月卡 (30天)</option>
+        <option value="quarter">季卡 (90天)</option>
+        <option value="year">年卡 (365天)</option>
+      </select>
+      <input id="gen-count" type="number" value="1" min="1" max="500" style="width:80px"> 张
+      <input id="gen-note" placeholder="备注（如客户名）" style="width:200px">
+      <button onclick="genKeys()">📤 生成</button>
+    </div>
+    <div id="gen-result" class="note"></div>
+  </div>
+
+  <div class="panel">
+    <h3 style="margin-top:0">卡密列表</h3>
+    <div class="flex">
+      <select id="filter-status" onchange="loadKeys()">
+        <option value="">全部状态</option>
+        <option value="unused">未使用</option>
+        <option value="used">已激活</option>
+        <option value="revoked">已禁用</option>
+      </select>
+      <button class="ghost" onclick="loadKeys()">🔄 刷新</button>
+    </div>
+    <table id="keys-tbl"><thead><tr>
+      <th>卡密</th><th>套餐</th><th>状态</th><th>机器ID</th><th>到期</th><th>备注</th><th>操作</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+</div>
+
+<div id="announce" class="section">
+  <h2>📢 公告管理</h2>
+  <div class="panel">
+    <h3 style="margin-top:0">发布新公告</h3>
+    <input id="ann-title" placeholder="标题" style="width:100%;margin-bottom:8px">
+    <textarea id="ann-content" placeholder="内容（支持换行）"></textarea>
+    <div class="flex" style="margin-top:8px">
+      <select id="ann-prio">
+        <option value="info">📝 普通</option>
+        <option value="warn">⚠️ 重要</option>
+        <option value="urgent">🚨 紧急</option>
+      </select>
+      <button onclick="postAnnounce()">发布</button>
+    </div>
+    <div id="ann-msg" class="note"></div>
+  </div>
+  <div class="panel">
+    <h3 style="margin-top:0">历史公告</h3>
+    <table id="ann-tbl"><thead><tr>
+      <th>时间</th><th>级别</th><th>标题</th><th>内容</th><th>操作</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+</div>
+
+<!-- 👥 用户监控 -->
+<div id="clients" class="section">
+  <h2>👥 用户监控</h2>
+  <div class="note">所有客户端的最近一次心跳（每 5 分钟上报一次）。可基于 IP / 机器ID 识别异常用户。</div>
+  <div class="panel">
+    <div class="flex">
+      <button class="ghost" onclick="loadClients()">🔄 刷新</button>
+      <input id="cf-search" placeholder="搜索：卡密/IP/机器ID" style="width:240px" oninput="renderClients()">
+      <label><input type="checkbox" id="cf-online" onchange="renderClients()"> 仅看在线</label>
+    </div>
+    <table id="clients-tbl"><thead><tr>
+      <th>状态</th><th>机器ID</th><th>卡密</th><th>套餐</th><th>IP</th>
+      <th>版本</th><th>系统</th><th>操作数</th><th>AI 调用</th><th>上次活跃</th><th>操作</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+</div>
+
+<!-- 🤖 AI 默认 Key -->
+<div id="aikey" class="section">
+  <h2>🤖 系统默认 DeepSeek Key</h2>
+  <div class="note">客户端在用户未配置自己的 Key 时，会自动从服务器拉取这里设的默认 Key（30 分钟缓存）</div>
+  <div class="panel">
+    <div style="margin-bottom:10px">
+      <label>API Key:</label><br>
+      <input id="ai-key" type="password" placeholder="sk-xxxxxxxxxxxxxxxx" style="width:60%">
+      <button class="ghost" onclick="toggleAiKey()" id="ai-eye">👁 显示</button>
+    </div>
+    <div style="margin-bottom:10px">
+      <label>模型:</label><br>
+      <select id="ai-model">
+        <option value="deepseek-chat">deepseek-chat</option>
+        <option value="deepseek-reasoner">deepseek-reasoner</option>
+      </select>
+    </div>
+    <div style="margin-bottom:10px">
+      <label>Base URL:</label><br>
+      <input id="ai-base" style="width:60%" value="https://api.deepseek.com/v1/chat/completions">
+    </div>
+    <button onclick="saveAi()">💾 保存</button>
+    <button class="ghost" onclick="loadAi()">🔄 重载</button>
+    <div id="ai-msg" class="note"></div>
+  </div>
+</div>
+
+<!-- ⏱ 套餐限额 -->
+<div id="limits" class="section">
+  <h2>⏱ 套餐限额设置</h2>
+  <div class="note">控制每种套餐的操作间隔、每日上限。客户端拿到这些值后会强制执行（防止低价套餐被恶用）</div>
+  <div class="panel">
+    <table id="limits-tbl"><thead><tr>
+      <th>套餐</th><th>最小间隔(秒)</th><th>最大间隔(秒)</th>
+      <th>每日操作上限</th><th>每日AI上限</th><th>最大账号数</th><th>操作</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+</div>
+
+<!-- 🆕 版本发布 -->
+<div id="releases" class="section">
+  <h2>🆕 客户端版本发布</h2>
+  <div class="note">上传新版 exe → 客户端启动时自动检测 → 用户一键升级（无需重新安装）</div>
+  <div class="panel">
+    <h3 style="margin-top:0">上传新版本</h3>
+    <div style="margin-bottom:8px">
+      <label>版本号 (如 v2.7):</label><br>
+      <input id="rel-ver" placeholder="v2.7" style="width:140px">
+    </div>
+    <div style="margin-bottom:8px">
+      <label>最低兼容版本 (低于此版本会被强制升级，留空=不强制):</label><br>
+      <input id="rel-min" placeholder="v2.0" style="width:140px">
+    </div>
+    <div style="margin-bottom:8px">
+      <label><input type="checkbox" id="rel-force"> 标记为强制升级（用户不能跳过）</label>
+    </div>
+    <div style="margin-bottom:8px">
+      <label>更新内容（每行一条）:</label><br>
+      <textarea id="rel-log" placeholder="- 修复xxx&#10;- 新增yyy" style="min-height:80px"></textarea>
+    </div>
+    <div style="margin-bottom:8px">
+      <label>EXE 文件:</label><br>
+      <input id="rel-file" type="file" accept=".exe">
+    </div>
+    <button onclick="uploadRelease()">📤 发布</button>
+    <span id="rel-msg" class="note" style="margin-left:12px"></span>
+  </div>
+
+  <div class="panel">
+    <h3 style="margin-top:0">历史版本</h3>
+    <table id="rel-tbl"><thead><tr>
+      <th>版本</th><th>大小</th><th>SHA256</th><th>强制</th><th>更新说明</th><th>发布时间</th><th>操作</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+</div>
+
+<!-- 🚫 封禁机器 -->
+<div id="blocked" class="section">
+  <h2>🚫 封禁机器</h2>
+  <div class="note">被封禁的机器 ID 即便有有效卡密也无法激活/启动软件。常用于打击恶意用户/破解传播。</div>
+  <div class="panel">
+    <h3 style="margin-top:0">手动添加封禁</h3>
+    <div class="flex">
+      <input id="bk-mid" placeholder="机器 ID（32位）" style="width:300px;font-family:Consolas">
+      <input id="bk-reason" placeholder="封禁原因（可选）" style="width:240px">
+      <button class="danger" onclick="addBlock()">🚫 封禁</button>
+    </div>
+    <div id="bk-msg" class="note"></div>
+  </div>
+  <div class="panel">
+    <h3 style="margin-top:0">已封禁列表</h3>
+    <table id="bk-tbl"><thead><tr>
+      <th>机器ID</th><th>封禁原因</th><th>封禁时间</th><th>操作</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+</div>
+
+</div>
+
+<script>
+document.querySelectorAll('.tab').forEach(a => {
+  a.onclick = e => {
+    e.preventDefault();
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(x => x.classList.remove('active'));
+    a.classList.add('active');
+    document.getElementById(a.dataset.tab).classList.add('active');
+    if (a.dataset.tab === 'dashboard') loadStats();
+    if (a.dataset.tab === 'keys') loadKeys();
+    if (a.dataset.tab === 'announce') loadAnnounces();
+    if (a.dataset.tab === 'clients') loadClients();
+    if (a.dataset.tab === 'aikey') loadAi();
+    if (a.dataset.tab === 'limits') loadLimits();
+    if (a.dataset.tab === 'blocked') loadBlocked();
+    if (a.dataset.tab === 'releases') loadReleases();
+  };
+});
+
+// ---- 🆕 版本发布 ----
+async function loadReleases() {
+  const r = await api('/releases');
+  const body = document.querySelector('#rel-tbl tbody');
+  body.innerHTML = '';
+  for (const x of r.list || []) {
+    const tr = document.createElement('tr');
+    const sizeKB = (x.size / 1024).toFixed(0);
+    const sizeMB = (x.size / 1024 / 1024).toFixed(1);
+    tr.innerHTML = `<td><strong>${x.version}</strong></td>
+      <td>${sizeMB} MB</td>
+      <td class="copy" onclick="copy('${x.sha256}')">${(x.sha256||'').slice(0,12)}…</td>
+      <td>${x.force_update ? '<span class="tag tag-revoked">强制</span>' : ''}</td>
+      <td style="max-width:300px;white-space:pre-wrap">${escapeHtml(x.changelog||'')}</td>
+      <td>${x.published_at_human||''}</td>
+      <td><button class="danger" onclick="delRelease(${x.id})">删除</button></td>`;
+    body.appendChild(tr);
+  }
+}
+
+async function uploadRelease() {
+  const ver = document.getElementById('rel-ver').value.trim();
+  const minv = document.getElementById('rel-min').value.trim();
+  const force = document.getElementById('rel-force').checked ? '1' : '0';
+  const log = document.getElementById('rel-log').value.trim();
+  const file = document.getElementById('rel-file').files[0];
+  if (!ver || !file) { alert('版本号和文件必填'); return; }
+  const msg = document.getElementById('rel-msg');
+  msg.textContent = '上传中...';
+  const fd = new FormData();
+  fd.append('version', ver);
+  fd.append('min_version', minv);
+  fd.append('force_update', force);
+  fd.append('changelog', log);
+  fd.append('file', file);
+  try {
+    const resp = await fetch('/admin/api/releases/upload', {
+      method: 'POST', body: fd, credentials: 'include'});
+    const r = await resp.json();
+    if (r.ok) {
+      msg.textContent = '✓ 已发布';
+      document.getElementById('rel-ver').value = '';
+      document.getElementById('rel-min').value = '';
+      document.getElementById('rel-log').value = '';
+      document.getElementById('rel-file').value = '';
+      document.getElementById('rel-force').checked = false;
+      loadReleases();
+    } else {
+      msg.textContent = '✗ ' + (r.msg || '失败');
+    }
+  } catch (e) {
+    msg.textContent = '✗ ' + e;
+  }
+}
+
+async function delRelease(id) {
+  if (!confirm('删除该版本？已升级的用户不受影响。')) return;
+  await api('/releases/delete', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({id})});
+  loadReleases();
+}
+
+// ---- 👥 用户监控 ----
+let _clients_cache = [];
+async function loadClients() {
+  const r = await api('/clients');
+  _clients_cache = r.list || [];
+  renderClients();
+}
+function renderClients() {
+  const search = (document.getElementById('cf-search').value || '').toLowerCase();
+  const onlineOnly = document.getElementById('cf-online').checked;
+  const body = document.querySelector('#clients-tbl tbody');
+  body.innerHTML = '';
+  for (const c of _clients_cache) {
+    if (onlineOnly && !c.online) continue;
+    const blob = (c.machine_id + ' ' + c.card_key + ' ' + (c.last_ip||'')).toLowerCase();
+    if (search && !blob.includes(search)) continue;
+    const status = c.blocked
+      ? '<span class="tag tag-revoked">🚫已封</span>'
+      : (c.online
+         ? '<span class="tag tag-used">🟢在线</span>'
+         : '<span class="tag tag-unused">⚫离线</span>');
+    const action = c.blocked
+      ? `<button class="ghost" onclick="unblock('${c.machine_id}')">解封</button>`
+      : `<button class="danger" onclick="blockMachine('${c.machine_id}','${(c.card_key||'').slice(0,8)} 异常')">封禁</button>`;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${status}</td>
+      <td class="copy" onclick="copy('${c.machine_id}')">${(c.machine_id||'').slice(0,16)}…</td>
+      <td>${c.card_key||''}</td><td>${c.plan||''}</td>
+      <td>${c.last_ip||''}</td><td>${c.version||''}</td><td>${c.os_info||''}</td>
+      <td>${c.action_count||0}</td><td>${c.ai_calls||0}</td>
+      <td>${c.last_seen_human||''}</td><td>${action}</td>`;
+    body.appendChild(tr);
+  }
+}
+
+// ---- 🤖 AI 默认 Key ----
+async function loadAi() {
+  const r = await api('/ai_config');
+  if (!r.ok) return;
+  document.getElementById('ai-key').value = r.api_key || '';
+  document.getElementById('ai-model').value = r.model || 'deepseek-chat';
+  document.getElementById('ai-base').value = r.base_url || '';
+}
+function toggleAiKey() {
+  const el = document.getElementById('ai-key');
+  const btn = document.getElementById('ai-eye');
+  if (el.type === 'password') { el.type = 'text'; btn.textContent = '👁 隐藏'; }
+  else { el.type = 'password'; btn.textContent = '👁 显示'; }
+}
+async function saveAi() {
+  const body = {
+    api_key: document.getElementById('ai-key').value.trim(),
+    model: document.getElementById('ai-model').value,
+    base_url: document.getElementById('ai-base').value.trim(),
+  };
+  const r = await api('/ai_config', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  });
+  document.getElementById('ai-msg').textContent = r.ok ? '✓ 已保存（客户端 30 分钟内生效）' : '✗ ' + (r.msg||'失败');
+}
+
+// ---- ⏱ 套餐限额 ----
+async function loadLimits() {
+  const r = await api('/plan_limits');
+  const body = document.querySelector('#limits-tbl tbody');
+  body.innerHTML = '';
+  const planLabel = {day:'日卡',week:'周卡',month:'月卡',quarter:'季卡',year:'年卡'};
+  for (const p of r.list || []) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><strong>${planLabel[p.plan]||p.plan}</strong></td>
+      <td><input type="number" value="${p.action_delay_min}" style="width:80px" id="lim-${p.plan}-amin"></td>
+      <td><input type="number" value="${p.action_delay_max}" style="width:80px" id="lim-${p.plan}-amax"></td>
+      <td><input type="number" value="${p.daily_actions}" style="width:90px" id="lim-${p.plan}-daily"></td>
+      <td><input type="number" value="${p.ai_daily}" style="width:90px" id="lim-${p.plan}-ai"></td>
+      <td><input type="number" value="${p.max_accounts}" style="width:70px" id="lim-${p.plan}-acc"></td>
+      <td><button onclick="saveLimit('${p.plan}')">💾</button></td>`;
+    body.appendChild(tr);
+  }
+}
+async function saveLimit(plan) {
+  const body = {
+    plan,
+    action_delay_min: +document.getElementById(`lim-${plan}-amin`).value,
+    action_delay_max: +document.getElementById(`lim-${plan}-amax`).value,
+    daily_actions:    +document.getElementById(`lim-${plan}-daily`).value,
+    ai_daily:         +document.getElementById(`lim-${plan}-ai`).value,
+    max_accounts:     +document.getElementById(`lim-${plan}-acc`).value,
+  };
+  const r = await api('/plan_limits', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  });
+  if (r.ok) alert('✓ ' + plan + ' 已保存');
+  else alert('✗ ' + (r.msg || '失败'));
+}
+
+// ---- 🚫 封禁机器 ----
+async function loadBlocked() {
+  const r = await api('/blocked');
+  const body = document.querySelector('#bk-tbl tbody');
+  body.innerHTML = '';
+  for (const b of r.list || []) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="copy" onclick="copy('${b.machine_id}')">${(b.machine_id||'').slice(0,24)}…</td>
+      <td>${escapeHtml(b.reason||'')}</td><td>${b.blocked_at_human||''}</td>
+      <td><button class="ghost" onclick="unblock('${b.machine_id}')">解封</button></td>`;
+    body.appendChild(tr);
+  }
+}
+async function addBlock() {
+  const mid = document.getElementById('bk-mid').value.trim();
+  const reason = document.getElementById('bk-reason').value.trim();
+  if (!mid) { alert('机器ID必填'); return; }
+  const r = await api('/block', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({machine_id: mid, reason})
+  });
+  document.getElementById('bk-msg').textContent = r.ok ? '✓ 已封禁' : '✗ ' + (r.msg||'失败');
+  document.getElementById('bk-mid').value = '';
+  document.getElementById('bk-reason').value = '';
+  loadBlocked();
+}
+async function blockMachine(mid, reason) {
+  if (!confirm('确定封禁机器: ' + mid.slice(0,16) + '… ?')) return;
+  await api('/block', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({machine_id: mid, reason})
+  });
+  loadClients();
+  loadBlocked();
+}
+async function unblock(mid) {
+  if (!confirm('解封机器: ' + mid.slice(0,16) + '… ?')) return;
+  await api('/unblock', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({machine_id: mid})
+  });
+  loadClients();
+  loadBlocked();
+}
+
+async function api(path, opts={}) {
+  opts.credentials = 'include';
+  const r = await fetch('/admin/api' + path, opts);
+  return await r.json();
+}
+
+async function loadStats() {
+  const r = await api('/stats');
+  if (!r.ok) return;
+  document.getElementById('stat-total').textContent = r.total;
+  document.getElementById('stat-used').textContent = r.used;
+  document.getElementById('stat-active').textContent = r.active;
+  document.getElementById('stat-unused').textContent = r.unused;
+  document.getElementById('stat-revoked').textContent = r.revoked;
+  const recent = await api('/keys?limit=10&status=used');
+  const body = document.querySelector('#recent tbody');
+  body.innerHTML = '';
+  for (const k of recent.keys || []) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${k.key}</td><td>${k.plan}</td><td>${(k.machine_id||'').slice(0,20)}</td>
+      <td>${fmtTs(k.activated_at)}</td><td>${fmtTs(k.expires_at)}</td>`;
+    body.appendChild(tr);
+  }
+}
+
+async function loadKeys() {
+  const status = document.getElementById('filter-status').value;
+  const r = await api('/keys' + (status ? '?status='+status : ''));
+  const body = document.querySelector('#keys-tbl tbody');
+  body.innerHTML = '';
+  for (const k of r.keys || []) {
+    const tr = document.createElement('tr');
+    const tag = `<span class="tag tag-${k.status}">${k.status}</span>`;
+    const mid = (k.machine_id || '').slice(0, 16);
+    const btns = [];
+    if (k.status === 'used' && k.machine_id) {
+      btns.push(`<button onclick="unbind('${k.key}')" title="清掉机器绑定，客户可在新机器上重新激活，保留剩余有效期">解绑</button>`);
+    }
+    if (k.status !== 'revoked') {
+      btns.push(`<button class="danger" onclick="revoke('${k.key}')">禁用</button>`);
+    }
+    const actions = btns.join(' ');
+    tr.innerHTML = `<td class="copy" onclick="copy('${k.key}')">${k.key}</td>
+      <td>${k.plan}</td><td>${tag}</td>
+      <td>${mid}</td>
+      <td>${fmtTs(k.expires_at)}</td><td>${k.note||''}</td><td>${actions}</td>`;
+    body.appendChild(tr);
+  }
+}
+
+async function genKeys() {
+  const plan = document.getElementById('gen-plan').value;
+  const count = parseInt(document.getElementById('gen-count').value);
+  const note = document.getElementById('gen-note').value;
+  const r = await api('/keys/create', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({plan, count, note})
+  });
+  const out = document.getElementById('gen-result');
+  if (r.ok) {
+    out.innerHTML = '<strong style="color:#7ee787">✓ 已生成:</strong><br>'
+      + r.keys.map(k => `<span class="copy" onclick="copy('${k}')">${k}</span>`).join('<br>');
+    loadKeys();
+    loadStats();
+  } else {
+    out.innerHTML = '<span style="color:#f85149">✗ ' + (r.msg || '失败') + '</span>';
+  }
+}
+
+async function revoke(key) {
+  if (!confirm('禁用卡密 ' + key + '？')) return;
+  await api('/keys/revoke', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({key})
+  });
+  loadKeys();
+}
+
+async function unbind(key) {
+  if (!confirm('解绑卡密 ' + key + '？\n\n会清掉当前的机器绑定，客户可拿这张卡密在新机器上重新激活。剩余有效期保留。')) return;
+  const r = await api('/keys/unbind', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({key})
+  });
+  if (!r.ok) { alert('解绑失败: ' + (r.msg || '')); return; }
+  loadKeys();
+  loadStats();
+}
+
+async function postAnnounce() {
+  const title = document.getElementById('ann-title').value.trim();
+  const content = document.getElementById('ann-content').value.trim();
+  const prio = document.getElementById('ann-prio').value;
+  if (!title || !content) { alert('标题和内容必填'); return; }
+  const r = await api('/announce', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({title, content, priority: prio})
+  });
+  const msg = document.getElementById('ann-msg');
+  if (r.ok) {
+    msg.textContent = '✓ 已发布';
+    document.getElementById('ann-title').value = '';
+    document.getElementById('ann-content').value = '';
+    loadAnnounces();
+  } else {
+    msg.textContent = '✗ ' + (r.msg || '失败');
+  }
+}
+
+async function loadAnnounces() {
+  const r = await api('/announces');
+  const body = document.querySelector('#ann-tbl tbody');
+  body.innerHTML = '';
+  for (const a of r.list || []) {
+    const tr = document.createElement('tr');
+    const prio = {info:'📝普通', warn:'⚠️重要', urgent:'🚨紧急'}[a.priority] || a.priority;
+    tr.innerHTML = `<td>${fmtTs(a.created_at)}</td><td>${prio}</td>
+      <td>${escapeHtml(a.title)}</td>
+      <td style="max-width:400px;white-space:pre-wrap">${escapeHtml(a.content)}</td>
+      <td><button class="danger" onclick="delAnn(${a.id})">删除</button></td>`;
+    body.appendChild(tr);
+  }
+}
+
+async function delAnn(id) {
+  if (!confirm('删除公告？')) return;
+  await api('/announce/delete', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({id})
+  });
+  loadAnnounces();
+}
+
+function fmtTs(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts * 1000);
+  return d.toLocaleString('zh-CN', {hour12: false});
+}
+function copy(s) {
+  navigator.clipboard.writeText(s).then(() => {
+    const el = event.target;
+    const orig = el.textContent;
+    el.textContent = '✓ 已复制';
+    setTimeout(() => el.textContent = orig, 1200);
+  });
+}
+function escapeHtml(s) {
+  return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+loadStats();
+</script>
+</body></html>
