@@ -1,16 +1,21 @@
 name: Build Mac App
 
-# 触发方式：手动点击 Run workflow 按钮，或推送 tag
+# Triggers: manual / push tag v* / push self-modifications to master
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号 (如 2.5.1)'
+        description: 'Version (e.g. 2.8)'
         required: false
-        default: '2.5'
+        default: '2.8'
   push:
     tags:
       - 'v*'
+    branches:
+      - master
+      - main
+    paths:
+      - '.github/workflows/build_mac.yml'
 
 jobs:
   build-mac:
