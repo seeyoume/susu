@@ -879,31 +879,69 @@ def admin_api_releases_list():
 def admin_api_releases_upload():
     fail = _need_api_login()
     if fail: return fail
-    f = request.files.get("file")
-    version = (request.form.get("version") or "").strip()
-    changelog = (request.form.get("changelog") or "").strip()
-    min_version = (request.form.get("min_version") or "").strip()
-    force_update = int(request.form.get("force_update", "0"))
-    if not f or not version:
-        return jsonify(ok=False, msg="文件 / 版本号必填"), 400
-    if not version.startswith("v"):
-        version = "v" + version
-    filename = f"QiQiCollector_{version.replace('.', '_')}.exe"
-    save_path = RELEASES_DIR / filename
-    f.save(str(save_path))
-    raw = save_path.read_bytes()
-    sha = hashlib.sha256(raw).hexdigest()
-    conn = get_conn()
+    import traceback
     try:
-        conn.execute(
-            "INSERT INTO releases(version, filename, size, sha256, changelog, "
-            "min_version, force_update, published_at) VALUES (?,?,?,?,?,?,?,?)",
-            (version, filename, len(raw), sha, changelog, min_version,
-             force_update, int(time.time())))
-        conn.commit()
-    except sqlite3.IntegrityError:
-        return jsonify(ok=False, msg="该版本号已存在"), 400
-    return jsonify(ok=True, filename=filename, sha256=sha, size=len(raw))
+        f = request.files.get("file")
+        version = (request.form.get("version") or "").strip()
+        changelog = (request.form.get("changelog") or "").strip()
+        min_version = (request.form.get("min_version") or "").strip()
+        force_update = int(request.form.get("force_update", "0"))
+        if not f or not version:
+            return jsonify(ok=False, msg="文件 / 版本号必填"), 400
+        if not version.startswith("v"):
+            version = "v" + version
+
+        # 确保目录存在 + 可写
+        RELEASES_DIR.mkdir(parents=True, exist_ok=True)
+        if not os.access(str(RELEASES_DIR), os.W_OK):
+            return jsonify(ok=False,
+                           msg=f"上传目录无写入权限: {RELEASES_DIR}"), 500
+
+        filename = f"QiQiCollector_{version.replace('.', '_')}.exe"
+        save_path = RELEASES_DIR / filename
+
+        # 重复版本预检（避免上传完才报错浪费时间）
+        conn = get_conn()
+        exists = conn.execute(
+            "SELECT 1 FROM releases WHERE version=?", (version,)).fetchone()
+        if exists:
+            return jsonify(ok=False, msg="该版本号已存在"), 400
+
+        # 流式保存到磁盘
+        f.save(str(save_path))
+        size = save_path.stat().st_size
+        if size == 0:
+            try: save_path.unlink()
+            except Exception: pass
+            return jsonify(ok=False, msg="上传文件为空"), 400
+
+        # 流式计算 SHA256（不再 read_bytes 整个读入内存）
+        sha = hashlib.sha256()
+        with open(save_path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                sha.update(chunk)
+        sha_hex = sha.hexdigest()
+
+        try:
+            conn.execute(
+                "INSERT INTO releases(version, filename, size, sha256, changelog, "
+                "min_version, force_update, published_at) VALUES (?,?,?,?,?,?,?,?)",
+                (version, filename, size, sha_hex, changelog, min_version,
+                 force_update, int(time.time())))
+            conn.commit()
+        except sqlite3.IntegrityError:
+            try: save_path.unlink()
+            except Exception: pass
+            return jsonify(ok=False, msg="该版本号已存在"), 400
+        return jsonify(ok=True, filename=filename, sha256=sha_hex, size=size)
+    except Exception as e:
+        # 把异常细节回传，避免 500 黑盒
+        tb = traceback.format_exc()
+        try:
+            print(f"[releases/upload] 异常: {e}\n{tb}", flush=True)
+        except Exception:
+            pass
+        return jsonify(ok=False, msg=f"服务器异常: {e}"), 500
 
 
 @app.route("/admin/api/releases/delete", methods=["POST"])
