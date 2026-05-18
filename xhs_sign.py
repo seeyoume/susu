@@ -39,14 +39,27 @@ def _resolve_js(name):
 
 
 def _find_node():
-    """ 1) 优先用打包的 static/node.exe  2) 退回系统 PATH 里的 node """
-    bundled = STATIC_DIR / ("node.exe" if os.name == "nt" else "node")
+    """ 1) 优先用打包的 static/node(.exe)  2) 退回系统 PATH 里的 node """
+    node_name = "node.exe" if os.name == "nt" else "node"
+    bundled = STATIC_DIR / node_name
     if bundled.exists():
+        # macOS 打包的 node 二进制需要可执行权限
+        if os.name != "nt":
+            try:
+                bundled.chmod(bundled.stat().st_mode | 0o111)
+            except Exception:
+                pass
         return str(bundled)
     sys_node = shutil.which("node")
     if sys_node:
         return sys_node
-    raise RuntimeError("找不到 node 可执行文件（既无 static/node.exe 也无系统 node）")
+    if sys.platform == "darwin":
+        hint = "请先安装 Node.js：\n  brew install node\n或访问 https://nodejs.org 下载安装包"
+    elif os.name == "nt":
+        hint = "请先安装 Node.js：https://nodejs.org"
+    else:
+        hint = "请先安装 Node.js：sudo apt install nodejs  或  https://nodejs.org"
+    raise RuntimeError(f"找不到 Node.js 可执行文件（既无内置 static/{node_name} 也无系统 node）\n{hint}")
 
 
 class XhsSigner:

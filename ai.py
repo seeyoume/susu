@@ -184,7 +184,7 @@ def _parse_range(text, default_min, default_max):
     s = str(text).strip()
     if not s:
         return default_min, default_max
-    m = re.findall(r"\\d+", s)
+    m = re.findall(r"\d+", s)
     if len(m) >= 2:
         a, b = int(m[0]), int(m[1])
         if a > b:

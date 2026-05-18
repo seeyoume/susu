@@ -12,6 +12,23 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 
+# ── macOS SSL 修复 ────────────────────────────────────────────────────────────
+# macOS 的 Python.org 安装包不自动信任系统根证书，导致所有 HTTPS 请求
+# （DeepSeek API / 授权服务器）报 SSLCertVerificationError。
+# 在进程最早期 patch 全局 opener，后续所有 urlopen 调用自动生效。
+def _patch_ssl():
+    import ssl
+    import urllib.request as _ur
+    try:
+        import certifi
+        _ctx = ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        _ctx = ssl.create_default_context()
+    _ur.install_opener(_ur.build_opener(_ur.HTTPSHandler(context=_ctx)))
+
+_patch_ssl()
+# ─────────────────────────────────────────────────────────────────────────────
+
 # 跨平台字体：Windows 用微软雅黑 / Mac 用 PingFang SC / 其余用系统默认
 _SYS = _platform.system()
 FONT_UI   = "PingFang SC"   if _SYS == "Darwin" else "Microsoft YaHei"

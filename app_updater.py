@@ -111,64 +111,106 @@ def _get_current_exe():
 
 
 def apply_update(new_exe_path):
-    """ 用 .bat 脚本异步替换并重启。当前进程立刻退出。
-        - 开发模式（python main.py）下不可用 """
+    """ 用脚本异步替换并重启。当前进程立刻退出。
+        - 开发模式（python main.py）下不可用
+        - Windows 用 .bat；macOS/Linux 用 .sh """
     cur = _get_current_exe()
     if not cur:
         raise RuntimeError("开发模式下无法自动替换 exe，请手动覆盖")
     new_exe_path = Path(new_exe_path)
     log = Path(tempfile.gettempdir()) / "qiqi_update.log"
-    bat = Path(tempfile.gettempdir()) / f"qiqi_apply_{int(time.time())}.bat"
 
-    # 写 bat 使用系统代码页（mbcs），避免中文路径乱码
-    # 逻辑：等待旧进程退出（最多 30s）→ 重试删旧 exe → copy 新 exe → 启动 → 清理
-    lines = [
-        "@echo off",
-        "chcp 65001 >nul",
-        f'set "NEW={new_exe_path}"',
-        f'set "CUR={cur}"',
-        f'set "LOG={log}"',
-        f'set "NAME={cur.name}"',
-        "set WAIT=0",
-        ":waitloop",
-        "timeout /t 1 /nobreak >nul",
-        'tasklist /FI "IMAGENAME eq %NAME%" 2>nul | find /I "%NAME%" >nul',
-        "if not errorlevel 1 (",
-        "  set /a WAIT+=1",
-        "  if %WAIT% lss 30 goto waitloop",
-        ")",
-        'echo [%DATE% %TIME%] replacing >> "%LOG%"',
-        # 最多重试 5 次删旧 exe
-        "set RETRY=0",
-        ":delloop",
-        'del /F /Q "%CUR%" 2>nul',
-        'if exist "%CUR%" (',
-        "  set /a RETRY+=1",
-        "  if %RETRY% lss 5 (",
-        "    timeout /t 1 /nobreak >nul",
-        "    goto delloop",
-        "  )",
-        '  echo [%DATE% %TIME%] delete failed >> "%LOG%"',
-        "  goto end",
-        ")",
-        # move 失败（跨盘）时 fallback copy
-        'move /Y "%NEW%" "%CUR%" >nul 2>&1',
-        "if errorlevel 1 (",
-        '  copy /Y "%NEW%" "%CUR%" >nul',
-        '  del /F /Q "%NEW%" 2>nul',
-        ")",
-        'echo [%DATE% %TIME%] done >> "%LOG%"',
-        'start "" "%CUR%"',
-        ":end",
-        'del "%~f0"',
-    ]
-    bat.write_text("\r\n".join(lines) + "\r\n", encoding="mbcs", errors="replace")
+    if sys.platform == "darwin" or os.name != "nt":
+        # ── macOS / Linux：shell 脚本 ──────────────────────────────────────
+        sh = Path(tempfile.gettempdir()) / f"qiqi_apply_{int(time.time())}.sh"
+        lines = [
+            "#!/bin/sh",
+            f'NEW="{new_exe_path}"',
+            f'CUR="{cur}"',
+            f'LOG="{log}"',
+            f'NAME="{cur.name}"',
+            "WAIT=0",
+            # 等待旧进程退出（最多 30 秒）
+            'while [ $WAIT -lt 30 ]; do',
+            '  pgrep -f "$NAME" > /dev/null 2>&1 || break',
+            '  sleep 1; WAIT=$((WAIT+1))',
+            'done',
+            'echo "[$(date)] replacing" >> "$LOG"',
+            # 重试删除/替换（最多 5 次）
+            "RETRY=0",
+            'while [ $RETRY -lt 5 ]; do',
+            '  rm -f "$CUR" 2>/dev/null',
+            '  [ ! -f "$CUR" ] && break',
+            '  sleep 1; RETRY=$((RETRY+1))',
+            'done',
+            'cp "$NEW" "$CUR" && chmod +x "$CUR"',
+            'rm -f "$NEW"',
+            'echo "[$(date)] done" >> "$LOG"',
+            # macOS：open 启动 .app bundle 或直接运行二进制
+            'if [ "$(uname)" = "Darwin" ]; then',
+            '  APP_BUNDLE="$(dirname "$(dirname "$(dirname "$CUR")")")"',
+            '  if echo "$APP_BUNDLE" | grep -q "\\.app$"; then',
+            '    open "$APP_BUNDLE"',
+            '  else',
+            '    open "$CUR"',
+            '  fi',
+            'else',
+            '  "$CUR" &',
+            'fi',
+            'rm -f "$0"',
+        ]
+        sh.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        sh.chmod(sh.stat().st_mode | 0o755)
+        subprocess.Popen(["sh", str(sh)], close_fds=True)
 
-    subprocess.Popen(
-        ["cmd", "/c", str(bat)],
-        creationflags=0x08000000,  # CREATE_NO_WINDOW
-        close_fds=True,
-    )
+    else:
+        # ── Windows：bat 脚本 ──────────────────────────────────────────────
+        bat = Path(tempfile.gettempdir()) / f"qiqi_apply_{int(time.time())}.bat"
+        lines = [
+            "@echo off",
+            "chcp 65001 >nul",
+            f'set "NEW={new_exe_path}"',
+            f'set "CUR={cur}"',
+            f'set "LOG={log}"',
+            f'set "NAME={cur.name}"',
+            "set WAIT=0",
+            ":waitloop",
+            "timeout /t 1 /nobreak >nul",
+            'tasklist /FI "IMAGENAME eq %NAME%" 2>nul | find /I "%NAME%" >nul',
+            "if not errorlevel 1 (",
+            "  set /a WAIT+=1",
+            "  if %WAIT% lss 30 goto waitloop",
+            ")",
+            'echo [%DATE% %TIME%] replacing >> "%LOG%"',
+            "set RETRY=0",
+            ":delloop",
+            'del /F /Q "%CUR%" 2>nul',
+            'if exist "%CUR%" (',
+            "  set /a RETRY+=1",
+            "  if %RETRY% lss 5 (",
+            "    timeout /t 1 /nobreak >nul",
+            "    goto delloop",
+            "  )",
+            '  echo [%DATE% %TIME%] delete failed >> "%LOG%"',
+            "  goto end",
+            ")",
+            'move /Y "%NEW%" "%CUR%" >nul 2>&1',
+            "if errorlevel 1 (",
+            '  copy /Y "%NEW%" "%CUR%" >nul',
+            '  del /F /Q "%NEW%" 2>nul',
+            ")",
+            'echo [%DATE% %TIME%] done >> "%LOG%"',
+            'start "" "%CUR%"',
+            ":end",
+            'del "%~f0"',
+        ]
+        bat.write_text("\r\n".join(lines) + "\r\n", encoding="mbcs", errors="replace")
+        subprocess.Popen(
+            ["cmd", "/c", str(bat)],
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+            close_fds=True,
+        )
+
     time.sleep(0.5)
     os._exit(0)
 

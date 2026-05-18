@@ -283,7 +283,14 @@ class XHSScraper:
             launch_kwargs["proxy"] = self.proxy
             self.log(f"使用代理: {self.proxy['server']}")
         last_err = None
-        for kw in ({"channel": "msedge"}, {"channel": "chrome"}, {}):
+        # Mac 通常没有 Edge，跳过 msedge 直接尝试 Chrome → 默认 Chromium
+        import sys as _sys
+        _ch_order = (
+            [{"channel": "chrome"}, {}]
+            if _sys.platform == "darwin"
+            else [{"channel": "msedge"}, {"channel": "chrome"}, {}]
+        )
+        for kw in _ch_order:
             try:
                 self.browser = self.pw.chromium.launch(**launch_kwargs, **kw)
                 break

@@ -33,6 +33,7 @@ hiddenimports = [
     'PIL', 'PIL.Image', 'PIL.ImageDraw', 'PIL.ImageFont',
     '_tkinter',
     'ttkbootstrap',
+    'certifi',
 ]
 
 tmp_ret = collect_all('playwright')
