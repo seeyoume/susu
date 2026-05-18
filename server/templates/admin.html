@@ -328,8 +328,23 @@ async function uploadRelease() {
   try {
     const resp = await fetch('/admin/api/releases/upload', {
       method: 'POST', body: fd, credentials: 'include'});
-    const r = await resp.json();
+    let r;
+    const ct = resp.headers.get('content-type') || '';
+    if (ct.includes('application/json')) {
+      r = await resp.json();
+    } else {
+      const text = await resp.text();
+      if (resp.status === 413) {
+        msg.style.color = '#f85149';
+        msg.textContent = `✗ Nginx 文件大小限制（HTTP 413）— 请在 Nginx 配置中添加：client_max_body_size 500M;`;
+      } else {
+        msg.style.color = '#f85149';
+        msg.textContent = `✗ 服务器返回 HTTP ${resp.status}（非JSON）— ${text.slice(0, 120)}`;
+      }
+      return;
+    }
     if (r.ok) {
+      msg.style.color = '';
       msg.textContent = '✓ 已发布';
       document.getElementById('rel-ver').value = '';
       document.getElementById('rel-min').value = '';
@@ -338,9 +353,11 @@ async function uploadRelease() {
       document.getElementById('rel-force').checked = false;
       loadReleases();
     } else {
+      msg.style.color = '#f85149';
       msg.textContent = '✗ ' + (r.msg || '失败');
     }
   } catch (e) {
+    msg.style.color = '#f85149';
     msg.textContent = '✗ ' + e;
   }
 }

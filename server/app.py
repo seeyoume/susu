@@ -990,8 +990,10 @@ def index():
     return redirect("/admin")
 
 
+# 无论是 `python app.py` 还是 gunicorn/supervisor 启动，都执行建表
+init_db()
+
 if __name__ == "__main__":
-    init_db()
     if ADMIN_TOKEN.startswith("CHANGE_ME"):
         print("=" * 50)
         print("⚠️  ADMIN_TOKEN 还是默认值，部署前请改！")
