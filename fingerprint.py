@@ -66,7 +66,9 @@ def get_fingerprint(account):
     fp = _fp_file(account)
     if fp.exists():
         try:
-            return json.loads(fp.read_text(encoding="utf-8"))
+            data = json.loads(fp.read_text(encoding="utf-8"))
+            data["_account_name"] = account  # 注入账号名（运行时用作噪声种子）
+            return data
         except Exception:
             pass
     data = _generate(account)
@@ -75,6 +77,7 @@ def get_fingerprint(account):
                        encoding="utf-8")
     except Exception:
         pass
+    data["_account_name"] = account
     return data
 
 
@@ -125,9 +128,10 @@ def make_init_script(fp):
         f'{{"brand":"Not-A.Brand","version":"99"}}]'
     )
 
-    # 用账号名哈希生成稳定但独特的 canvas/audio 噪声种子
+    # 用 account 名当种子（不用 UA，避免多账号同 UA 撞同一个噪声）
     import hashlib as _hl
-    _seed_hex = _hl.md5(ua.encode()).hexdigest()[:8]
+    _seed_src = fp.get('_account_name') or fp.get('account') or ua
+    _seed_hex = _hl.md5(str(_seed_src).encode()).hexdigest()[:8]
     canvas_r = int(_seed_hex[0:2], 16)      # 0-255
     canvas_g = int(_seed_hex[2:4], 16)
     canvas_b = int(_seed_hex[4:6], 16)
@@ -293,6 +297,115 @@ def make_init_script(fp):
         try {{
             Object.defineProperty(document, 'visibilityState', {{get: () => 'visible'}});
             Object.defineProperty(document, 'hidden', {{get: () => false}});
+        }} catch(e) {{}}
+
+        // ⑩ WebRTC 屏蔽（防代理场景下真实 IP 泄露）
+        try {{
+            const _block = function() {{
+                throw new Error('WebRTC blocked');
+            }};
+            // 直接 undefined 太明显，改为返回一个"看似正常但拿不到 candidate"的对象
+            const _RTC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+            if (_RTC) {{
+                const _Wrap = function(...args) {{
+                    const pc = new _RTC(...args);
+                    const _addIce = pc.addIceCandidate ? pc.addIceCandidate.bind(pc) : null;
+                    // 仅过滤掉 srflx/host 类型的 candidate（暴露 IP 的）
+                    Object.defineProperty(pc, 'onicecandidate', {{
+                        set: function(handler) {{
+                            this._origHandler = handler;
+                            this._wrapped = function(ev) {{
+                                if (ev && ev.candidate && ev.candidate.candidate) {{
+                                    const c = ev.candidate.candidate;
+                                    if (c.includes('typ srflx') || c.includes('typ host')) return;
+                                }}
+                                if (handler) handler(ev);
+                            }};
+                            _RTC.prototype.__lookupSetter__('onicecandidate').call(this, this._wrapped);
+                        }},
+                        get: function() {{ return this._origHandler; }}
+                    }});
+                    return pc;
+                }};
+                _Wrap.prototype = _RTC.prototype;
+                window.RTCPeerConnection = _Wrap;
+                if (window.webkitRTCPeerConnection) window.webkitRTCPeerConnection = _Wrap;
+            }}
+        }} catch(e) {{}}
+
+        // ⑪ Function.prototype.toString 代理（防"看 toString 是否 native"的检测）
+        try {{
+            const _nativeToString = Function.prototype.toString;
+            const _toStringStr = _nativeToString.call(_nativeToString);
+            const _markedFns = new WeakSet();
+            Function.prototype.toString = new Proxy(_nativeToString, {{
+                apply: function(target, thisArg, args) {{
+                    if (_markedFns.has(thisArg)) {{
+                        // 被我们改写过的函数，返回伪造的 native code 字符串
+                        return 'function ' + (thisArg.name || '') + '() {{ [native code] }}';
+                    }}
+                    return Reflect.apply(target, thisArg, args);
+                }}
+            }});
+            // 标记几个常见被检测的函数
+            try {{ _markedFns.add(navigator.permissions.query); }} catch(e) {{}}
+            try {{ _markedFns.add(HTMLCanvasElement.prototype.toDataURL); }} catch(e) {{}}
+            try {{ _markedFns.add(HTMLCanvasElement.prototype.getContext); }} catch(e) {{}}
+            try {{ _markedFns.add(AudioBuffer.prototype.getChannelData); }} catch(e) {{}}
+            try {{ _markedFns.add(Function.prototype.toString); }} catch(e) {{}}
+        }} catch(e) {{}}
+
+        // ⑫ 字体指纹：让字体探测返回稳定的"普通 Windows/Mac"字体集
+        try {{
+            if (document.fonts && document.fonts.check) {{
+                const _commonFonts = new Set([
+                    'Arial','Arial Black','Calibri','Cambria','Comic Sans MS','Consolas',
+                    'Courier New','Georgia','Helvetica','Impact','Lucida Console',
+                    'Microsoft YaHei','Microsoft Sans Serif','PingFang SC','SimSun','SimHei',
+                    '宋体','黑体','微软雅黑','Tahoma','Times New Roman','Trebuchet MS',
+                    'Verdana','sans-serif','serif','monospace'
+                ]);
+                const _origCheck = document.fonts.check.bind(document.fonts);
+                document.fonts.check = function(spec, text) {{
+                    try {{
+                        for (const f of _commonFonts) {{
+                            if (spec.includes('"' + f + '"') || spec.includes(f)) return true;
+                        }}
+                    }} catch(e) {{}}
+                    return false;
+                }};
+            }}
+        }} catch(e) {{}}
+
+        // ⑬ Notification.permission 默认值（自动化下常返回 'denied'，真实浏览器是 'default'）
+        try {{
+            if (window.Notification) {{
+                Object.defineProperty(Notification, 'permission', {{get: () => 'default'}});
+            }}
+        }} catch(e) {{}}
+
+        // ⑭ Battery API（部分检测看 charging 是否永远 true）
+        try {{
+            if (navigator.getBattery) {{
+                navigator.getBattery = () => Promise.resolve({{
+                    charging: true,
+                    chargingTime: Infinity,
+                    dischargingTime: Infinity,
+                    level: 0.84 + Math.random() * 0.15,
+                    addEventListener: () => {{}},
+                    removeEventListener: () => {{}},
+                }});
+            }}
+        }} catch(e) {{}}
+
+        // ⑮ Connection API 一致性（移动 vs PC 时网络类型不应是 cellular）
+        try {{
+            if (navigator.connection) {{
+                Object.defineProperty(navigator.connection, 'rtt',           {{get: () => 50}});
+                Object.defineProperty(navigator.connection, 'downlink',       {{get: () => 10}});
+                Object.defineProperty(navigator.connection, 'effectiveType',  {{get: () => '4g'}});
+                Object.defineProperty(navigator.connection, 'saveData',       {{get: () => false}});
+            }}
         }} catch(e) {{}}
 
     }} catch (e) {{}}

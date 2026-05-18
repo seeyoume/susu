@@ -253,7 +253,32 @@ class XHSScraper:
 
     def start(self):
         self.pw = sync_playwright().start()
-        launch_kwargs = {"headless": self.headless}
+        # 反检测：移除 Playwright 默认的 --enable-automation，加上一组隐藏自动化痕迹的 flag
+        stealth_args = [
+            "--disable-blink-features=AutomationControlled",
+            "--disable-features=IsolateOrigins,site-per-process,AutomationControlled",
+            "--disable-site-isolation-trials",
+            "--no-default-browser-check",
+            "--no-first-run",
+            "--disable-default-apps",
+            "--disable-dev-shm-usage",
+            "--disable-popup-blocking",
+            "--disable-infobars",
+            "--disable-background-networking",
+            "--disable-component-update",
+            "--disable-domain-reliability",
+            "--disable-sync",
+            "--disable-translate",
+            "--disable-features=TranslateUI",
+            "--no-pings",
+            "--password-store=basic",
+            "--use-mock-keychain",
+        ]
+        launch_kwargs = {
+            "headless": self.headless,
+            "args": stealth_args,
+            "ignore_default_args": ["--enable-automation", "--enable-blink-features=IdleDetection"],
+        }
         if self.proxy:
             launch_kwargs["proxy"] = self.proxy
             self.log(f"使用代理: {self.proxy['server']}")
@@ -280,6 +305,11 @@ class XHSScraper:
                             silent=True)
         except Exception as e:
             self.log(f"⚠ 预热访问失败（可忽略）: {e}")
+        # 启动闲置鼠标抖动线程（反检测）
+        try:
+            self._idle_jitter_start()
+        except Exception:
+            pass
 
     def _open_context(self):
         sp = self._state_path()
@@ -437,6 +467,56 @@ class XHSScraper:
             self.page.keyboard.type(ch, delay=delay)
         # 短暂停顿表示打字结束
         self._sleep(random.uniform(0.2, 0.5))
+
+    def _human_scroll(self, total_distance, direction="down"):
+        """模拟人类滚动：分段、变速、偶尔回滚停顿"""
+        sign = 1 if direction == "down" else -1
+        remaining = abs(total_distance)
+        while remaining > 0 and not self.stop_event.is_set():
+            step = random.randint(80, 260)
+            step = min(step, remaining)
+            try:
+                self.page.mouse.wheel(0, sign * step)
+            except Exception:
+                break
+            self._sleep(random.uniform(0.25, 1.1))
+            # 5% 概率回滚一下（真人偶尔会，模拟"刚才那段没看清"）
+            if random.random() < 0.05 and remaining > 200:
+                try:
+                    self.page.mouse.wheel(0, -sign * random.randint(40, 120))
+                except Exception:
+                    pass
+                self._sleep(random.uniform(0.3, 0.8))
+            # 15% 概率长停顿（"在阅读内容"）
+            if random.random() < 0.15:
+                self._sleep(random.uniform(1.2, 3.0))
+            remaining -= step
+
+    def _idle_jitter_start(self):
+        """闲置时鼠标小幅游走，模拟真人坐在电脑前的随机动作"""
+        if getattr(self, '_jitter_thread', None) and self._jitter_thread.is_alive():
+            return
+        import threading
+        def loop():
+            while self.is_alive() and not self.stop_event.is_set():
+                try:
+                    time.sleep(random.uniform(8, 28))
+                    if not self.is_alive() or self.stop_event.is_set():
+                        break
+                    cx = getattr(self, '_mx', None)
+                    cy = getattr(self, '_my', None)
+                    if cx is None or cy is None:
+                        # 还没有移动过，跳过这一轮
+                        continue
+                    # 在当前位置附近随机游走 ±60px
+                    nx = max(50, cx + random.randint(-80, 80))
+                    ny = max(50, cy + random.randint(-60, 60))
+                    self._human_move(nx, ny)
+                except Exception:
+                    pass
+        t = threading.Thread(target=loop, daemon=True, name="idle-jitter")
+        t.start()
+        self._jitter_thread = t
 
     def _on_request(self, req):
         """ 抓取关键写操作的 POST 请求（评论/点赞/关注），用于反向调试 """
