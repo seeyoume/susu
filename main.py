@@ -1294,7 +1294,23 @@ class App:
                     time.sleep(0.5)
                     self.root.after(0, lambda: msg_var.set(
                         "✓ 已下载，3 秒后自动重启..."))
-                    self.root.after(2500, lambda: app_updater.apply_update(new_exe))
+
+                    def _do_apply():
+                        try:
+                            if app_updater.is_installer_update(info):
+                                app_updater.apply_update_installer(new_exe)
+                            else:
+                                app_updater.apply_update(new_exe)
+                        except RuntimeError as ex:
+                            msg_var.set(f"✗ {ex}")
+                            btn_up.configure(state="normal")
+                            btn_later.configure(state="normal")
+                        except Exception as ex:
+                            msg_var.set(f"✗ 替换失败: {ex}")
+                            btn_up.configure(state="normal")
+                            btn_later.configure(state="normal")
+
+                    self.root.after(2500, _do_apply)
                 except RuntimeError as e:
                     self.root.after(0, lambda: msg_var.set(f"✗ {e}"))
                     self.root.after(0, lambda: btn_up.configure(state="normal"))

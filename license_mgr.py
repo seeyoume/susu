@@ -20,7 +20,7 @@ LICENSE_FILE = Path(os.path.expanduser("~")) / ".qiqi_license.dat"
 GRACE_DAYS = 3  # 离线宽限天数
 
 # 客户端版本（与 UI 显示一致）
-CLIENT_VERSION = "v2.6"
+CLIENT_VERSION = "v2.9"
 
 # subprocess 调用 wmic/powershell 时不弹黑窗（exe 模式下需要）
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0

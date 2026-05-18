@@ -98,6 +98,11 @@ def download_update(info, progress_cb=None):
     return tmp
 
 
+def is_installer_update(info):
+    """ 判断服务器下发的是安装包（Setup.exe）还是裸 exe 替换 """
+    return bool(info.get("installer")) or str(info.get("download_url", "")).lower().endswith("_setup.exe")
+
+
 def _get_current_exe():
     """ 返回当前运行的 exe 路径（PyInstaller 打包后）；开发模式下返回 None """
     if getattr(sys, "frozen", False):
@@ -112,27 +117,70 @@ def apply_update(new_exe_path):
     if not cur:
         raise RuntimeError("开发模式下无法自动替换 exe，请手动覆盖")
     new_exe_path = Path(new_exe_path)
-    # 用 .bat 脚本：等 3 秒（让当前进程退出）→ 删旧 → 改名新 → 启动
+    log = Path(tempfile.gettempdir()) / "qiqi_update.log"
     bat = Path(tempfile.gettempdir()) / f"qiqi_apply_{int(time.time())}.bat"
-    bat.write_text(
-        "@echo off\r\n"
-        "chcp 65001 >nul\r\n"
-        f'cd /d "{cur.parent}"\r\n'
-        ":wait\r\n"
-        "timeout /t 1 /nobreak >nul\r\n"
-        f'tasklist /FI "IMAGENAME eq {cur.name}" 2>nul | find /I "{cur.name}" >nul && goto wait\r\n'
-        f'del /F /Q "{cur}" 2>nul\r\n'
-        f'move /Y "{new_exe_path}" "{cur}" >nul\r\n'
-        f'start "" "{cur}"\r\n'
-        f'del "%~f0"\r\n',
-        encoding="utf-8"
-    )
-    # 启动 bat 后立刻退出本进程
+
+    # 写 bat 使用系统代码页（mbcs），避免中文路径乱码
+    # 逻辑：等待旧进程退出（最多 30s）→ 重试删旧 exe → copy 新 exe → 启动 → 清理
+    lines = [
+        "@echo off",
+        "chcp 65001 >nul",
+        f'set "NEW={new_exe_path}"',
+        f'set "CUR={cur}"',
+        f'set "LOG={log}"',
+        f'set "NAME={cur.name}"',
+        "set WAIT=0",
+        ":waitloop",
+        "timeout /t 1 /nobreak >nul",
+        'tasklist /FI "IMAGENAME eq %NAME%" 2>nul | find /I "%NAME%" >nul',
+        "if not errorlevel 1 (",
+        "  set /a WAIT+=1",
+        "  if %WAIT% lss 30 goto waitloop",
+        ")",
+        'echo [%DATE% %TIME%] replacing >> "%LOG%"',
+        # 最多重试 5 次删旧 exe
+        "set RETRY=0",
+        ":delloop",
+        'del /F /Q "%CUR%" 2>nul',
+        'if exist "%CUR%" (',
+        "  set /a RETRY+=1",
+        "  if %RETRY% lss 5 (",
+        "    timeout /t 1 /nobreak >nul",
+        "    goto delloop",
+        "  )",
+        '  echo [%DATE% %TIME%] delete failed >> "%LOG%"',
+        "  goto end",
+        ")",
+        # move 失败（跨盘）时 fallback copy
+        'move /Y "%NEW%" "%CUR%" >nul 2>&1',
+        "if errorlevel 1 (",
+        '  copy /Y "%NEW%" "%CUR%" >nul',
+        '  del /F /Q "%NEW%" 2>nul',
+        ")",
+        'echo [%DATE% %TIME%] done >> "%LOG%"',
+        'start "" "%CUR%"',
+        ":end",
+        'del "%~f0"',
+    ]
+    bat.write_text("\r\n".join(lines) + "\r\n", encoding="mbcs", errors="replace")
+
     subprocess.Popen(
         ["cmd", "/c", str(bat)],
         creationflags=0x08000000,  # CREATE_NO_WINDOW
         close_fds=True,
     )
-    # 给系统点时间启动那个 bat
+    time.sleep(0.5)
+    os._exit(0)
+
+
+def apply_update_installer(setup_exe_path):
+    """ 运行 Inno Setup 安装包静默升级（/SILENT），安装完成后自动重启。
+        适用于服务器下发 _Setup.exe 时的场景。 """
+    setup_exe_path = Path(setup_exe_path)
+    subprocess.Popen(
+        [str(setup_exe_path), "/SILENT", "/NORESTART"],
+        creationflags=0x00000008,  # DETACHED_PROCESS
+        close_fds=True,
+    )
     time.sleep(0.5)
     os._exit(0)
