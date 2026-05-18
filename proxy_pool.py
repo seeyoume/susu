@@ -17,8 +17,11 @@ POOL_FILE = Path(__file__).parent / "accounts" / "_proxy_pool.json"
 PROBE_URL = "https://www.xiaohongshu.com/"  # 探测目标
 PROBE_TIMEOUT = 8
 
+_file_lock = threading.Lock()  # 保护 POOL_FILE 的并发读写
 
-def _load():
+
+def _load_unsafe():
+    """不加锁的读取，仅在已持有 _file_lock 时调用。"""
     if not POOL_FILE.exists():
         return {"proxies": [], "binding": {}}
     try:
@@ -30,10 +33,24 @@ def _load():
         return {"proxies": [], "binding": {}}
 
 
-def _save(data):
+def _save_unsafe(data):
+    """不加锁的写入，仅在已持有 _file_lock 时调用。
+    写临时文件再 rename，防止写到一半崩溃导致文件损坏。"""
     POOL_FILE.parent.mkdir(exist_ok=True)
-    POOL_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                          encoding="utf-8")
+    tmp = POOL_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                   encoding="utf-8")
+    tmp.replace(POOL_FILE)
+
+
+def _load():
+    with _file_lock:
+        return _load_unsafe()
+
+
+def _save(data):
+    with _file_lock:
+        _save_unsafe(data)
 
 
 def list_proxies():
@@ -47,52 +64,53 @@ def list_bindings():
 def add_proxies(lines):
     """ 批量添加；lines 是 ['http://host:port', 'host:port', ...] 列表
         返回 (added, dup) """
-    data = _load()
-    existing = {p["url"] for p in data["proxies"]}
-    added = dup = 0
-    for ln in lines:
-        u = ln.strip()
-        if not u or u.startswith("#"):
-            continue
-        # 自动加前缀
-        if not u.startswith(("http://", "https://", "socks5://")):
-            u = "http://" + u
-        if u in existing:
-            dup += 1
-            continue
-        data["proxies"].append({
-            "url": u,
-            "status": "未测",
-            "latency_ms": 0,
-            "last_check": "",
-            "fail_count": 0,
-            "bound_to": "",  # 绑定的账号
-        })
-        existing.add(u)
-        added += 1
-    _save(data)
+    with _file_lock:
+        data = _load_unsafe()
+        existing = {p["url"] for p in data["proxies"]}
+        added = dup = 0
+        for ln in lines:
+            u = ln.strip()
+            if not u or u.startswith("#"):
+                continue
+            if not u.startswith(("http://", "https://", "socks5://")):
+                u = "http://" + u
+            if u in existing:
+                dup += 1
+                continue
+            data["proxies"].append({
+                "url": u,
+                "status": "未测",
+                "latency_ms": 0,
+                "last_check": "",
+                "fail_count": 0,
+                "bound_to": "",
+            })
+            existing.add(u)
+            added += 1
+        _save_unsafe(data)
     return added, dup
 
 
 def remove_proxy(url):
-    data = _load()
-    data["proxies"] = [p for p in data["proxies"] if p["url"] != url]
-    # 解绑
-    data["binding"] = {acc: u for acc, u in data["binding"].items() if u != url}
-    _save(data)
+    with _file_lock:
+        data = _load_unsafe()
+        data["proxies"] = [p for p in data["proxies"] if p["url"] != url]
+        data["binding"] = {acc: u for acc, u in data["binding"].items() if u != url}
+        _save_unsafe(data)
 
 
 def clear_dead():
     """ 清除所有 status='失效' 或 fail_count >= 3 """
-    data = _load()
-    keep = [p for p in data["proxies"]
-            if p["status"] != "失效" and p.get("fail_count", 0) < 3]
-    removed = len(data["proxies"]) - len(keep)
-    data["proxies"] = keep
-    # 同步清除绑定
-    valid_urls = {p["url"] for p in keep}
-    data["binding"] = {acc: u for acc, u in data["binding"].items() if u in valid_urls}
-    _save(data)
+    with _file_lock:
+        data = _load_unsafe()
+        keep = [p for p in data["proxies"]
+                if p["status"] != "失效" and p.get("fail_count", 0) < 3]
+        removed = len(data["proxies"]) - len(keep)
+        data["proxies"] = keep
+        valid_urls = {p["url"] for p in keep}
+        data["binding"] = {acc: u for acc, u in data["binding"].items()
+                           if u in valid_urls}
+        _save_unsafe(data)
     return removed
 
 

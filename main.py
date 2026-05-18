@@ -60,7 +60,7 @@ class App:
                                   self.license_data.get("plan", ""))
         exp = self.license_data.get("expires_at", 0)
         remain = lm.fmt_remain(exp) if exp else ""
-        root.title(f"绮绮采集器（仅供学习）v2.5  |  套餐: {plan}  |  剩余: {remain}")
+        root.title(f"绮绮采集器（仅供学习）{lm.CLIENT_VERSION}  |  套餐: {plan}  |  剩余: {remain}")
         root.geometry("1320x980")
         root.minsize(1180, 760)
         root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -175,12 +175,12 @@ class App:
             ttkb.Label(hdr, text="绮绮采集器",
                        font=(FONT_UI, 15, "bold"),
                        bootstyle="inverse-primary").pack(side="left")
-            ttkb.Label(hdr, text="  v2.8  XHS Scraper Pro",
+            ttkb.Label(hdr, text=f"  {lm.CLIENT_VERSION}  XHS Scraper Pro",
                        font=(FONT_UI, 9),
                        bootstyle="inverse-primary",
                        foreground="#ffffff99").pack(side="left", pady=(3, 0))
         except Exception:
-            tk.Label(hdr, text="绮绮采集器  v2.8",
+            tk.Label(hdr, text=f"绮绮采集器  {lm.CLIENT_VERSION}",
                      bg="#F25928", fg="white",
                      font=(FONT_UI, 14, "bold")).pack(side="left")
 
@@ -523,6 +523,8 @@ class App:
         try:
             log_dir = self.out_dir / "logs"
             log_dir.mkdir(exist_ok=True)
+            # 清理 7 天前的日志文件
+            self._rotate_logs(log_dir, keep_days=7)
             self.log_file = open(
                 log_dir / f"app_{time.strftime('%Y%m%d')}.log",
                 "a", encoding="utf-8", buffering=1,
@@ -531,6 +533,16 @@ class App:
         except Exception as e:
             self.log_file = None
             print(f"日志文件打开失败: {e}")
+
+    @staticmethod
+    def _rotate_logs(log_dir: Path, keep_days: int = 7):
+        cutoff = time.time() - keep_days * 86400
+        for f in log_dir.glob("app_*.log"):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+            except Exception:
+                pass
 
     # ---------- 授权过期提醒 ----------
     def _check_license_expiry(self):

@@ -105,6 +105,17 @@ def _connect(cfg):
     )
 
 
+def close_thread_conn():
+    """显式关闭当前线程的 MySQL 连接（线程退出时调用）。"""
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        _local.conn = None
+
+
 def get_conn():
     if not _HAS_PYMYSQL:
         return None
@@ -123,6 +134,11 @@ def get_conn():
         conn.ping(reconnect=True)
         return conn
     except Exception:
+        # ping 失败说明连接已断开，重建
+        try:
+            conn.close()
+        except Exception:
+            pass
         _local.conn = None
         return get_conn()
 

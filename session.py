@@ -78,15 +78,20 @@ class AccountSession:
         self.alert = True
         self.alert_reason = reason
         self.log(f"🚨 风控警报: {reason}，已停止本号任务")
-        try: self.scraper.request_stop()
-        except Exception: pass
+        try:
+            self.scraper.request_stop()
+        except Exception as e:
+            self.log(f"[warn] 停止任务失败: {e}")
         try:
             while not self.task_q.empty():
                 self.task_q.get_nowait()
-        except Exception: pass
+        except Exception as e:
+            self.log(f"[warn] 清空任务队列失败: {e}")
         if self.alert_callback:
-            try: self.alert_callback(self.account, reason)
-            except Exception: pass
+            try:
+                self.alert_callback(self.account, reason)
+            except Exception as e:
+                self.log(f"[warn] 风控回调异常: {e}")
 
     def clear_alert(self):
         self.alert = False
@@ -186,6 +191,12 @@ class AccountSession:
 
         try:
             self.scraper.close()
+        except Exception:
+            pass
+        # 线程退出前显式关闭本线程的 MySQL 连接，避免 too many connections
+        try:
+            import db as _db
+            _db.close_thread_conn()
         except Exception:
             pass
 

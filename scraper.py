@@ -141,6 +141,8 @@ class XHSScraper:
         self.context = None
         self.page = None
         self._api_buffer = []
+        self._api_buf_lock = threading.Lock()   # 保护 _api_buffer 跨线程读写
+        self._BUF_MAX = 200                      # 防内存无限增长
         self.stop_event = threading.Event()
         self.current_account = account
         self.proxy_raw = proxy or ""
@@ -366,7 +368,8 @@ class XHSScraper:
         self.page = self.context.new_page()
         self.page.on("response", self._on_response)
         self.page.on("request", self._on_request)
-        self._api_buffer.clear()
+        with self._api_buf_lock:
+            self._api_buffer.clear()
         self.captured_requests = []  # 抓包记录
 
     # ---------------- 控制 ----------------
@@ -557,8 +560,8 @@ class XHSScraper:
             if len(self.captured_requests) > 50:
                 self.captured_requests = self.captured_requests[-50:]
             self.log(f"📡 抓到 {req.method} {url[-60:]}")
-        except Exception:
-            pass
+        except Exception as e:
+            self.log(f"[warn] 抓包回调异常: {e}")
 
     def _on_response(self, resp):
         url = resp.url
@@ -568,7 +571,11 @@ class XHSScraper:
             if "json" not in resp.headers.get("content-type", ""):
                 return
             data = resp.json()
-            self._api_buffer.append({"url": url, "data": data})
+            with self._api_buf_lock:
+                self._api_buffer.append({"url": url, "data": data})
+                # 超出上限时丢弃最旧的一批，防止内存无限增长
+                if len(self._api_buffer) > self._BUF_MAX:
+                    self._api_buffer = self._api_buffer[-self._BUF_MAX:]
             # 顺手识别当前登录用户
             if "/user/me" in url or "/user/otherinfo" in url:
                 self._extract_user_info(data)
@@ -617,8 +624,9 @@ class XHSScraper:
             time.sleep(0.3)
 
     def _drain(self, key):
-        hit = [x for x in self._api_buffer if key in x["url"]]
-        self._api_buffer = [x for x in self._api_buffer if key not in x["url"]]
+        with self._api_buf_lock:
+            hit = [x for x in self._api_buffer if key in x["url"]]
+            self._api_buffer = [x for x in self._api_buffer if key not in x["url"]]
         return hit
 
     def save_state(self):
@@ -669,7 +677,8 @@ class XHSScraper:
     # ---------------- 搜索 ----------------
     def search_notes(self, keyword, max_count=20):
         self.log(f"搜索: {keyword}  目标 {max_count} 条")
-        self._api_buffer.clear()
+        with self._api_buf_lock:
+            self._api_buffer.clear()
         url = f"https://www.xiaohongshu.com/search_result?keyword={keyword}&source=web_explore_feed"
         self.page.goto(url, wait_until="domcontentloaded")
         self._sleep(3)
@@ -725,7 +734,8 @@ class XHSScraper:
             url = f"https://www.xiaohongshu.com/explore/{note_id}"
 
         self.log(f"采集笔记: {note_id}")
-        self._api_buffer.clear()
+        with self._api_buf_lock:
+            self._api_buffer.clear()
         self.page.goto(url, wait_until="domcontentloaded")
         self._sleep(4)
 
