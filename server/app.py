@@ -78,6 +78,24 @@ app.secret_key = os.environ.get("FLASK_SECRET", secrets.token_hex(32))
 app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "500")) * 1024 * 1024
 
 
+# 把所有 HTTP 错误（413、500 等）统一返回 JSON，避免前端收到 HTML
+from flask import Response as _Response
+from werkzeug.exceptions import HTTPException as _HTTPException
+
+@app.errorhandler(_HTTPException)
+def _handle_http_exc(e):
+    import json as _json
+    body = _json.dumps({"ok": False, "msg": f"HTTP {e.code}: {e.name}"})
+    return _Response(body, status=e.code, mimetype="application/json")
+
+@app.errorhandler(Exception)
+def _handle_generic_exc(e):
+    import json as _json, traceback as _tb
+    print(f"[unhandled] {e}\n{_tb.format_exc()}", flush=True)
+    body = _json.dumps({"ok": False, "msg": f"服务器异常: {e}"})
+    return _Response(body, status=500, mimetype="application/json")
+
+
 def init_db():
     conn = sqlite3.connect(str(DB_FILE))
     conn.execute("""CREATE TABLE IF NOT EXISTS keys (
@@ -991,7 +1009,10 @@ def index():
 
 
 # 无论是 `python app.py` 还是 gunicorn/supervisor 启动，都执行建表
-init_db()
+try:
+    init_db()
+except Exception as _e:
+    print(f"[init_db] 警告: {_e}", flush=True)
 
 if __name__ == "__main__":
     if ADMIN_TOKEN.startswith("CHANGE_ME"):
