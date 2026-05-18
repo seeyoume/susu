@@ -685,16 +685,21 @@ class App:
         except Exception:
             top = ttk.Frame(dlg)
         top.pack(fill="x")
-        ttk.Label(top, text="📖  功能使用帮助",
-                  font=(FONT_UI, 14, "bold"),
-                  foreground="white" if True else "#333",
-                  background=top.cget("background") if hasattr(top, "cget") else "#F25928"
-                  ).pack(side="left")
-        ttk.Label(top, text=f"绮绮采集器  {lm.CLIENT_VERSION}",
-                  font=(FONT_UI, 10),
-                  foreground="#ffffffaa" if True else "#666",
-                  background=top.cget("background") if hasattr(top, "cget") else "#F25928"
-                  ).pack(side="right")
+        try:
+            import ttkbootstrap as _ttkb
+            _ttkb.Label(top, text="📖  功能使用帮助",
+                        font=(FONT_UI, 14, "bold"),
+                        bootstyle="inverse-primary").pack(side="left")
+            _ttkb.Label(top, text=f"绮绮采集器  {lm.CLIENT_VERSION}",
+                        font=(FONT_UI, 10),
+                        bootstyle="inverse-primary").pack(side="right")
+        except Exception:
+            tk.Label(top, text="📖  功能使用帮助",
+                     font=(FONT_UI, 14, "bold"),
+                     bg="#F25928", fg="white").pack(side="left")
+            tk.Label(top, text=f"绮绮采集器  {lm.CLIENT_VERSION}",
+                     font=(FONT_UI, 10),
+                     bg="#F25928", fg="white").pack(side="right")
 
         # ── 主体：左目录 + 右内容 ──
         body = ttk.Frame(dlg)
