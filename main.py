@@ -1054,8 +1054,15 @@ class App:
         """ 显示版本升级对话框 """
         dlg = tk.Toplevel(self.root)
         dlg.title("🆕 发现新版本")
-        dlg.geometry("560x440")
+        dlg.geometry("580x520")
+        dlg.minsize(560, 480)
         dlg.transient(self.root); dlg.grab_set()
+        # 居中显示，确保按钮在屏幕内
+        dlg.update_idletasks()
+        sw, sh = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
+        x = (sw - 580) // 2
+        y = max(20, (sh - 520) // 2)
+        dlg.geometry(f"580x520+{x}+{y}")
 
         force = bool(info.get("force"))
         title_text = "🚨 强制更新" if force else "🆕 发现新版本"
@@ -1067,26 +1074,43 @@ class App:
                             f"最新版本：{info.get('latest_version','')}",
                   font=(FONT_UI, 11)).pack(pady=4)
 
+        # ⚠ 先把底部区域（按钮+进度条+大小）pack 到底部，再 pack 中间的滚动文本
+        #    这样按钮永远可见，不会被 Text expand 挤出去
+
+        # 强制更新提示（如果有）放底部
+        force_hint_frame = ttk.Frame(dlg)
+        force_hint_frame.pack(side="bottom", fill="x", pady=(0, 6))
+        if force:
+            ttk.Label(force_hint_frame,
+                      text="⚠ 此为强制更新，必须升级后才能继续使用",
+                      foreground="#c33").pack()
+
+        # 按钮区
+        bb = ttk.Frame(dlg)
+        bb.pack(side="bottom", pady=10)
+
+        # 状态消息
+        msg_var = tk.StringVar()
+        ttk.Label(dlg, textvariable=msg_var, foreground="#0a7").pack(side="bottom")
+
+        # 进度条
+        prog_var = tk.IntVar(value=0)
+        prog = ttk.Progressbar(dlg, variable=prog_var, maximum=100, length=520)
+        prog.pack(side="bottom", padx=20, pady=(8, 4))
+
+        # 文件大小
+        size_mb = (info.get("size") or 0) / 1024 / 1024
+        ttk.Label(dlg, text=f"大小：{size_mb:.1f} MB",
+                  foreground="#888").pack(side="bottom", anchor="w", padx=20)
+
+        # 中间是滚动文本（更新内容）
         ttk.Label(dlg, text="更新内容：",
                   font=(FONT_UI, 11, "bold")).pack(anchor="w", padx=20, pady=(8, 2))
-        cl = tk.Text(dlg, height=12, font=(FONT_UI, 10),
+        cl = tk.Text(dlg, height=8, font=(FONT_UI, 10),
                      bg="#f7f9fc", relief="flat", wrap="word")
         cl.pack(fill="both", expand=True, padx=20, pady=4)
         cl.insert("1.0", info.get("changelog") or "(无更新说明)")
         cl.config(state="disabled")
-
-        size_mb = (info.get("size") or 0) / 1024 / 1024
-        ttk.Label(dlg, text=f"大小：{size_mb:.1f} MB",
-                  foreground="#888").pack(anchor="w", padx=20)
-
-        # 进度条 + 状态
-        prog_var = tk.IntVar(value=0)
-        prog = ttk.Progressbar(dlg, variable=prog_var, maximum=100, length=480)
-        prog.pack(padx=20, pady=(8, 4))
-        msg_var = tk.StringVar()
-        ttk.Label(dlg, textvariable=msg_var, foreground="#0a7").pack()
-
-        bb = ttk.Frame(dlg); bb.pack(pady=10)
 
         def start_update():
             btn_up.configure(state="disabled")
@@ -1122,9 +1146,6 @@ class App:
                                 command=dlg.destroy if not force else None,
                                 state=("disabled" if force else "normal"))
         btn_later.pack(side="left", padx=6)
-        if force:
-            ttk.Label(dlg, text="⚠ 此为强制更新，必须升级后才能继续使用",
-                      foreground="#c33").pack(pady=4)
 
     # ---------- 公告 ----------
     def _fetch_announces_on_start(self):

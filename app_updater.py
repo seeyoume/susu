@@ -43,17 +43,51 @@ def download_update(info, progress_cb=None):
     tmp = Path(tempfile.gettempdir()) / f"qiqi_update_{int(time.time())}.exe"
     sha = hashlib.sha256()
     done = 0
-    with urllib.request.urlopen(url, timeout=60) as r:
-        with open(tmp, "wb") as f:
-            while True:
-                chunk = r.read(64 * 1024)
-                if not chunk:
-                    break
-                f.write(chunk)
-                sha.update(chunk)
-                done += len(chunk)
-                if progress_cb:
-                    progress_cb(done, total)
+    req = urllib.request.Request(url, headers={
+        "User-Agent": f"QiQiCollector/{CURRENT_VERSION} (Updater)",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            status = getattr(r, "status", 200) or 200
+            if status != 200:
+                raise RuntimeError(f"服务器返回 HTTP {status}")
+            content_length = r.headers.get("Content-Length")
+            if content_length and not total:
+                total = int(content_length)
+            with open(tmp, "wb") as f:
+                last_cb = 0.0
+                while True:
+                    try:
+                        chunk = r.read(128 * 1024)
+                    except Exception as e:
+                        raise RuntimeError(f"下载中断: {e}")
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    sha.update(chunk)
+                    done += len(chunk)
+                    # 限流回调，避免 GUI 卡死（每 0.1 秒最多回调一次）
+                    now = time.time()
+                    if progress_cb and (now - last_cb > 0.1 or done >= total):
+                        try: progress_cb(done, total or done)
+                        except Exception: pass
+                        last_cb = now
+    except urllib.error.HTTPError as e:
+        try: tmp.unlink()
+        except Exception: pass
+        raise RuntimeError(f"HTTP 错误 {e.code}: {e.reason}")
+    except urllib.error.URLError as e:
+        try: tmp.unlink()
+        except Exception: pass
+        raise RuntimeError(f"网络错误: {e.reason}")
+    except Exception as e:
+        try: tmp.unlink()
+        except Exception: pass
+        raise
+    if done == 0:
+        try: tmp.unlink()
+        except Exception: pass
+        raise RuntimeError("下载文件为空")
     # 校验
     expect_sha = info.get("sha256") or ""
     actual_sha = sha.hexdigest()
