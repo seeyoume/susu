@@ -573,6 +573,8 @@ class App:
         self._heartbeat_action_delta += n
 
     def _build_menu(self):
+        # 全局菜单字体（影响菜单栏及所有下拉项）
+        self.root.option_add("*Menu.font", (FONT_UI, 11))
         bar = tk.Menu(self.root)
         self.root.config(menu=bar)
 
