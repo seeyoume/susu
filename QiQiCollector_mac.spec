@@ -32,9 +32,15 @@ hiddenimports = [
     'openpyxl', 'pymysql',
     'PIL', 'PIL.Image', 'PIL.ImageDraw', 'PIL.ImageFont',
     '_tkinter',
+    'ttkbootstrap',
 ]
 
 tmp_ret = collect_all('playwright')
+datas     += tmp_ret[0]
+binaries  += tmp_ret[1]
+hiddenimports += tmp_ret[2]
+# 打包 ttkbootstrap 主题资源
+tmp_ret = collect_all('ttkbootstrap')
 datas     += tmp_ret[0]
 binaries  += tmp_ret[1]
 hiddenimports += tmp_ret[2]

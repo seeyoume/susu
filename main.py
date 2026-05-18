@@ -481,6 +481,32 @@ class App:
         m_bk.add_separator()
         m_bk.add_command(label="📁  打开输出目录", command=self.open_out)
 
+        # 🎨 主题
+        m_theme = tk.Menu(bar, tearoff=0)
+        bar.add_cascade(label="🎨 主题", menu=m_theme)
+        m_light = tk.Menu(m_theme, tearoff=0)
+        m_dark = tk.Menu(m_theme, tearoff=0)
+        m_theme.add_cascade(label="☀ 浅色主题", menu=m_light)
+        m_theme.add_cascade(label="🌙 深色主题", menu=m_dark)
+        cur = getattr(self.root, "_current_theme", DEFAULT_THEME)
+        for t in THEMES_LIGHT:
+            mark = "  ●" if t == cur else "   "
+            m_light.add_command(label=f"{mark}  {t}",
+                                command=lambda name=t: self._on_switch_theme(name))
+        for t in THEMES_DARK:
+            mark = "  ●" if t == cur else "   "
+            m_dark.add_command(label=f"{mark}  {t}",
+                               command=lambda name=t: self._on_switch_theme(name))
+
+    def _on_switch_theme(self, theme_name):
+        """ 用户点击主题菜单 → 切换 + 持久化 + 重建菜单刷新勾选状态 """
+        try:
+            switch_theme(self.root, theme_name)
+            self._build_menu()  # 重建以更新选中标记
+            self.log("SYS", f"🎨 已切换主题: {theme_name}")
+        except Exception as e:
+            self.log("SYS", f"切换主题失败: {e}")
+
     # ---------- 数据库 / AI 配置弹窗 ----------
     def on_db_config(self):
         cfg = db.load_db_config()
@@ -3934,77 +3960,102 @@ def _set_app_user_model_id():
         pass
 
 
-def _apply_ui_theme(root):
-    """ 全局字体放大 + 视觉优化 """
+# ttkbootstrap 可选主题列表（按 light/dark 分组）
+THEMES_LIGHT = ["cosmo", "flatly", "litera", "minty", "lumen", "sandstone",
+                "yeti", "pulse", "united", "morph", "journal", "simplex", "cerculean"]
+THEMES_DARK  = ["darkly", "superhero", "solar", "cyborg", "vapor"]
+DEFAULT_THEME = "cosmo"   # 默认 Bootstrap 浅色风格
+
+
+def _apply_ui_theme(root, theme_name=None):
+    """ 应用 ttkbootstrap 主题 + 字体优化
+        theme_name 为 None 时从设置读取，再没有就用 DEFAULT_THEME """
     try:
         from tkinter import font
-        FONT_SIZE = 11        # 主字号（比之前 10 大一档）
-        FONT_SM = 10          # 辅助小字
+        # 字体（所有主题共享）
+        FONT_SIZE = 11
         FONT_FAMILY = FONT_UI
-
-        # 基础字体调大
         for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont",
                      "TkHeadingFont", "TkCaptionFont", "TkSmallCaptionFont",
                      "TkIconFont", "TkTooltipFont"):
             try:
-                f = font.nametofont(name)
-                f.configure(family=FONT_FAMILY, size=FONT_SIZE)
-            except Exception:
-                pass
+                font.nametofont(name).configure(family=FONT_FAMILY, size=FONT_SIZE)
+            except Exception: pass
         try:
             font.nametofont("TkFixedFont").configure(family=FONT_MONO, size=FONT_SIZE)
-        except Exception:
-            pass
+        except Exception: pass
 
-        # ttk 样式
-        style = ttk.Style()
-        try: style.theme_use("vista")
-        except Exception:
-            try: style.theme_use("clam")
-            except Exception: pass
+        # 主题名：参数 → 设置 → 默认
+        if not theme_name:
+            try:
+                import settings_mgr
+                theme_name = settings_mgr.get("ui_theme", DEFAULT_THEME)
+            except Exception:
+                theme_name = DEFAULT_THEME
+        if theme_name not in THEMES_LIGHT and theme_name not in THEMES_DARK:
+            theme_name = DEFAULT_THEME
 
-        ACCENT = "#F25928"   # 品牌橙
-        ACCENT_HOVER = "#e04e20"
-        BG_LIGHT = "#f5f7fa"
-        FG_DARK = "#1a1a1a"
-        BORDER = "#d0d7de"
-
-        style.configure(".", font=(FONT_FAMILY, FONT_SIZE))
-        style.configure("TButton", padding=(10, 6),
-                        font=(FONT_FAMILY, FONT_SIZE))
-        style.configure("TLabel", font=(FONT_FAMILY, FONT_SIZE))
-        style.configure("TEntry", padding=5, font=(FONT_FAMILY, FONT_SIZE))
-        style.configure("TCombobox", padding=4, font=(FONT_FAMILY, FONT_SIZE))
-        style.configure("TCheckbutton", font=(FONT_FAMILY, FONT_SIZE))
-        style.configure("TRadiobutton", font=(FONT_FAMILY, FONT_SIZE))
-        style.configure("TNotebook.Tab",
-                        font=(FONT_FAMILY, FONT_SIZE, "bold"),
-                        padding=(16, 7))
-        style.configure("TLabelframe.Label",
-                        font=(FONT_FAMILY, FONT_SIZE, "bold"),
-                        foreground=ACCENT)
-        # Treeview 行高更舒适
-        style.configure("Treeview",
-                        font=(FONT_FAMILY, FONT_SM),
-                        rowheight=30)
-        style.configure("Treeview.Heading",
-                        font=(FONT_FAMILY, FONT_SM, "bold"),
-                        background="#e4eaf1",
-                        foreground=FG_DARK,
-                        padding=(6, 7))
-        # 选中行颜色
-        style.map("Treeview",
-                  background=[("selected", ACCENT)],
-                  foreground=[("selected", "white")])
-        # 让 Notebook Tab 切换时有颜色反馈
-        style.map("TNotebook.Tab",
-                  foreground=[("selected", ACCENT), ("!selected", "#444")],
-                  background=[("selected", "#fff"), ("!selected", "#eaeef3")])
-
-        # 主窗口背景色
-        root.configure(bg=BG_LIGHT)
+        # 优先 ttkbootstrap，失败则回退原生 ttk
+        try:
+            import ttkbootstrap as ttkb
+            style = ttkb.Style(theme=theme_name)
+            # 业务定制覆盖
+            style.configure(".", font=(FONT_FAMILY, FONT_SIZE))
+            style.configure("TButton", padding=(10, 6))
+            style.configure("TEntry", padding=5)
+            style.configure("TCombobox", padding=4)
+            style.configure("TNotebook.Tab", padding=(16, 7),
+                            font=(FONT_FAMILY, FONT_SIZE, "bold"))
+            style.configure("TLabelframe.Label",
+                            font=(FONT_FAMILY, FONT_SIZE, "bold"))
+            style.configure("Treeview", rowheight=30,
+                            font=(FONT_FAMILY, 10))
+            style.configure("Treeview.Heading",
+                            font=(FONT_FAMILY, 10, "bold"),
+                            padding=(6, 7))
+            # 强调色按钮（启动/保存类）
+            style.configure("Accent.TButton",
+                            font=(FONT_FAMILY, FONT_SIZE, "bold"))
+            # 主窗口背景跟随主题
+            try:
+                bg = style.colors.bg
+                root.configure(bg=bg)
+            except Exception:
+                pass
+            root._current_theme = theme_name
+            return style
+        except ImportError:
+            # ttkbootstrap 未安装 → 回退原生
+            style = ttk.Style()
+            try: style.theme_use("vista")
+            except Exception:
+                try: style.theme_use("clam")
+                except Exception: pass
+            ACCENT = "#F25928"
+            BG_LIGHT = "#f5f7fa"
+            style.configure(".", font=(FONT_FAMILY, FONT_SIZE))
+            style.configure("TButton", padding=(10, 6))
+            style.configure("TLabelframe.Label",
+                            font=(FONT_FAMILY, FONT_SIZE, "bold"),
+                            foreground=ACCENT)
+            style.configure("Treeview", rowheight=30)
+            style.map("Treeview",
+                      background=[("selected", ACCENT)],
+                      foreground=[("selected", "white")])
+            root.configure(bg=BG_LIGHT)
+            return style
     except Exception:
         pass
+
+
+def switch_theme(root, theme_name):
+    """ 运行时切换主题，保存到设置 """
+    try:
+        _apply_ui_theme(root, theme_name=theme_name)
+        import settings_mgr
+        settings_mgr.set_value("ui_theme", theme_name)
+    except Exception as e:
+        print(f"切换主题失败: {e}")
 
 
 def main():
