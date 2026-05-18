@@ -3967,25 +3967,41 @@ THEMES_DARK  = ["darkly", "superhero", "solar", "cyborg", "vapor"]
 DEFAULT_THEME = "cosmo"   # 默认 Bootstrap 浅色风格
 
 
-def _apply_ui_theme(root, theme_name=None):
-    """ 应用 ttkbootstrap 主题 + 字体优化
-        theme_name 为 None 时从设置读取，再没有就用 DEFAULT_THEME """
+def _apply_fonts(root):
+    """ 统一设置全局字体（与主题无关）"""
     try:
-        from tkinter import font
-        # 字体（所有主题共享）
-        FONT_SIZE = 11
-        FONT_FAMILY = FONT_UI
+        from tkinter import font as _fnt
         for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont",
                      "TkHeadingFont", "TkCaptionFont", "TkSmallCaptionFont",
                      "TkIconFont", "TkTooltipFont"):
-            try:
-                font.nametofont(name).configure(family=FONT_FAMILY, size=FONT_SIZE)
+            try: _fnt.nametofont(name).configure(family=FONT_UI, size=11)
             except Exception: pass
-        try:
-            font.nametofont("TkFixedFont").configure(family=FONT_MONO, size=FONT_SIZE)
+        try: _fnt.nametofont("TkFixedFont").configure(family=FONT_MONO, size=11)
         except Exception: pass
+    except Exception: pass
 
-        # 主题名：参数 → 设置 → 默认
+
+def _apply_ttkb_styles(style):
+    """ 在 ttkbootstrap Style 基础上叠加业务定制 """
+    try:
+        style.configure(".", font=(FONT_UI, 11))
+        style.configure("TButton",      padding=(10, 6))
+        style.configure("TEntry",       padding=5)
+        style.configure("TCombobox",    padding=4)
+        style.configure("TNotebook.Tab", padding=(16, 7),
+                        font=(FONT_UI, 11, "bold"))
+        style.configure("TLabelframe.Label", font=(FONT_UI, 11, "bold"))
+        style.configure("Treeview",     rowheight=30, font=(FONT_UI, 10))
+        style.configure("Treeview.Heading", font=(FONT_UI, 10, "bold"),
+                        padding=(6, 7))
+    except Exception: pass
+
+
+def _apply_ui_theme(root, theme_name=None):
+    """ 仅在使用旧版 tk.Tk() 根窗口时调用（fallback）"""
+    _apply_fonts(root)
+    try:
+        import ttkbootstrap as ttkb
         if not theme_name:
             try:
                 import settings_mgr
@@ -3994,64 +4010,41 @@ def _apply_ui_theme(root, theme_name=None):
                 theme_name = DEFAULT_THEME
         if theme_name not in THEMES_LIGHT and theme_name not in THEMES_DARK:
             theme_name = DEFAULT_THEME
-
-        # 优先 ttkbootstrap，失败则回退原生 ttk
+        style = ttkb.Style(theme=theme_name)
+        _apply_ttkb_styles(style)
         try:
-            import ttkbootstrap as ttkb
-            style = ttkb.Style(theme=theme_name)
-            # 业务定制覆盖
-            style.configure(".", font=(FONT_FAMILY, FONT_SIZE))
-            style.configure("TButton", padding=(10, 6))
-            style.configure("TEntry", padding=5)
-            style.configure("TCombobox", padding=4)
-            style.configure("TNotebook.Tab", padding=(16, 7),
-                            font=(FONT_FAMILY, FONT_SIZE, "bold"))
-            style.configure("TLabelframe.Label",
-                            font=(FONT_FAMILY, FONT_SIZE, "bold"))
-            style.configure("Treeview", rowheight=30,
-                            font=(FONT_FAMILY, 10))
-            style.configure("Treeview.Heading",
-                            font=(FONT_FAMILY, 10, "bold"),
-                            padding=(6, 7))
-            # 强调色按钮（启动/保存类）
-            style.configure("Accent.TButton",
-                            font=(FONT_FAMILY, FONT_SIZE, "bold"))
-            # 主窗口背景跟随主题
-            try:
-                bg = style.colors.bg
-                root.configure(bg=bg)
-            except Exception:
-                pass
-            root._current_theme = theme_name
-            return style
-        except ImportError:
-            # ttkbootstrap 未安装 → 回退原生
-            style = ttk.Style()
-            try: style.theme_use("vista")
-            except Exception:
-                try: style.theme_use("clam")
-                except Exception: pass
-            ACCENT = "#F25928"
-            BG_LIGHT = "#f5f7fa"
-            style.configure(".", font=(FONT_FAMILY, FONT_SIZE))
-            style.configure("TButton", padding=(10, 6))
-            style.configure("TLabelframe.Label",
-                            font=(FONT_FAMILY, FONT_SIZE, "bold"),
-                            foreground=ACCENT)
-            style.configure("Treeview", rowheight=30)
-            style.map("Treeview",
-                      background=[("selected", ACCENT)],
-                      foreground=[("selected", "white")])
-            root.configure(bg=BG_LIGHT)
-            return style
-    except Exception:
-        pass
+            root.configure(bg=style.colors.bg)
+        except Exception: pass
+        root._current_theme = theme_name
+        return style
+    except ImportError:
+        style = ttk.Style()
+        try: style.theme_use("vista")
+        except Exception:
+            try: style.theme_use("clam")
+            except Exception: pass
+        style.configure(".", font=(FONT_UI, 11))
+        style.configure("TButton", padding=(10, 6))
+        style.configure("TLabelframe.Label",
+                        font=(FONT_UI, 11, "bold"), foreground="#F25928")
+        style.configure("Treeview", rowheight=30)
+        style.map("Treeview",
+                  background=[("selected", "#F25928")],
+                  foreground=[("selected", "white")])
+        root.configure(bg="#f5f7fa")
+        return style
+    except Exception: pass
 
 
 def switch_theme(root, theme_name):
-    """ 运行时切换主题，保存到设置 """
+    """ 运行时切换主题 + 保存设置 """
     try:
-        _apply_ui_theme(root, theme_name=theme_name)
+        import ttkbootstrap as ttkb
+        style = ttkb.Style(theme=theme_name)
+        _apply_ttkb_styles(style)
+        try: root.configure(bg=style.colors.bg)
+        except Exception: pass
+        root._current_theme = theme_name
         import settings_mgr
         settings_mgr.set_value("ui_theme", theme_name)
     except Exception as e:
@@ -4073,9 +4066,20 @@ def main():
             r.destroy()
             return
 
-    # 2) 授权通过，再启主窗
-    root = tk.Tk()
-    _apply_ui_theme(root)
+    # 2) 授权通过，再启主窗（优先用 ttkbootstrap.Window 获得完整主题效果）
+    try:
+        import ttkbootstrap as ttkb
+        import settings_mgr
+        theme_name = settings_mgr.get("ui_theme", DEFAULT_THEME)
+        if theme_name not in THEMES_LIGHT and theme_name not in THEMES_DARK:
+            theme_name = DEFAULT_THEME
+        root = ttkb.Window(themename=theme_name, scaling=1.0)
+        root._current_theme = theme_name
+        _apply_fonts(root)
+        _apply_ttkb_styles(ttkb.Style())
+    except Exception:
+        root = tk.Tk()
+        _apply_ui_theme(root)
     App(root, license_data=data)
     root.mainloop()
 
