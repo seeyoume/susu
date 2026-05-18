@@ -113,82 +113,221 @@ class App:
         threading.Thread(target=self._heartbeat_loop, daemon=True).start()
 
     # ============ UI 构建 ============
-    def _build_ui(self):
-        # ---- 账号面板 ----
-        panel = ttk.LabelFrame(self.root, text="账号面板（点击行选中账号  双击=启动登录）", padding=4)
-        panel.pack(fill="x", padx=8, pady=(6, 2))
+    # ─────────────────────────────────────────────────────────────────────
+    # UI 构建辅助：带 bootstyle 回退的按钮工厂
+    # ─────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _btn(parent, text, command, bs="secondary", width=None, **kw):
+        try:
+            import ttkbootstrap as _ttkb
+            b = _ttkb.Button(parent, text=text, command=command,
+                             bootstyle=bs, **kw)
+        except Exception:
+            b = ttk.Button(parent, text=text, command=command, **kw)
+        if width:
+            b.configure(width=width)
+        return b
 
-        prow = ttk.Frame(panel); prow.pack(fill="x")
-        tv_wrap = ttk.Frame(prow); tv_wrap.pack(side="left", fill="x", expand=True)
+    @staticmethod
+    def _card(parent, title="", padding=10):
+        """现代卡片容器：顶部彩色标题条 + 内容区"""
+        outer = ttk.Frame(parent, style="Card.TFrame")
+        if title:
+            hdr = ttk.Label(outer, text=title,
+                            font=(FONT_UI, 10, "bold"),
+                            style="CardHeader.TLabel")
+            hdr.pack(fill="x", ipady=5, ipadx=10)
+        inner = ttk.Frame(outer, padding=padding)
+        inner.pack(fill="both", expand=True)
+        return outer, inner
+
+    def _build_ui(self):
+        # ══════════════════════════════════════════════════════
+        # 1. 顶部 Header Bar
+        # ══════════════════════════════════════════════════════
+        try:
+            import ttkbootstrap as ttkb
+            hdr = ttkb.Frame(self.root, bootstyle="primary", padding=(14, 8))
+        except Exception:
+            hdr = tk.Frame(self.root, bg="#F25928", pady=8)
+        hdr.pack(fill="x", side="top")
+
+        # 左侧：logo 文字 + 版本
+        try:
+            import ttkbootstrap as ttkb
+            ttkb.Label(hdr, text="绮绮采集器",
+                       font=(FONT_UI, 15, "bold"),
+                       bootstyle="inverse-primary").pack(side="left")
+            ttkb.Label(hdr, text="  v2.8  XHS Scraper Pro",
+                       font=(FONT_UI, 9),
+                       bootstyle="inverse-primary",
+                       foreground="#ffffff99").pack(side="left", pady=(3, 0))
+        except Exception:
+            tk.Label(hdr, text="绮绮采集器  v2.8",
+                     bg="#F25928", fg="white",
+                     font=(FONT_UI, 14, "bold")).pack(side="left")
+
+        # 右侧：套餐 + 剩余 + 日志按钮
+        plan = lm.PLAN_NAMES.get(self.license_data.get("plan", ""),
+                                  self.license_data.get("plan", "—"))
+        exp   = self.license_data.get("expires_at", 0)
+        remain = lm.fmt_remain(exp) if exp else "—"
+        try:
+            import ttkbootstrap as ttkb
+            ttkb.Label(hdr, text=f"套餐：{plan}",
+                       bootstyle="inverse-primary",
+                       font=(FONT_UI, 10)).pack(side="right", padx=(0, 6))
+            ttkb.Label(hdr, text=f"剩余：{remain}",
+                       bootstyle="inverse-primary",
+                       font=(FONT_UI, 10)).pack(side="right", padx=(0, 16))
+            self._btn(hdr, "📋 日志", self._show_log_window,
+                      bs="secondary-outline").pack(side="right", padx=4)
+        except Exception:
+            tk.Label(hdr, text=f"套餐:{plan}  剩余:{remain}",
+                     bg="#F25928", fg="white",
+                     font=(FONT_UI, 10)).pack(side="right", padx=12)
+            ttk.Button(hdr, text="📋 日志",
+                       command=self._show_log_window).pack(side="right", padx=4)
+
+        # ══════════════════════════════════════════════════════
+        # 2. 主体：左侧边栏 + 右侧内容
+        # ══════════════════════════════════════════════════════
+        body = ttk.Frame(self.root)
+        body.pack(fill="both", expand=True, side="top")
+
+        # ── 左侧边栏 ──────────────────────────────────────────
+        sidebar = ttk.Frame(body, width=220)
+        sidebar.pack(side="left", fill="y", padx=(6, 0), pady=6)
+        sidebar.pack_propagate(False)   # 固定 220px 宽
+
+        # 账号列表卡片
+        acc_hdr = ttk.Label(sidebar, text="👤  账号管理",
+                             font=(FONT_UI, 10, "bold"))
+        acc_hdr.pack(fill="x", pady=(0, 4))
+        ttk.Separator(sidebar, orient="horizontal").pack(fill="x", pady=(0, 6))
+
+        tv_wrap = ttk.Frame(sidebar)
+        tv_wrap.pack(fill="both", expand=True)
         cols = ("alias", "nick", "proxy", "login", "status")
-        self.tv = ttk.Treeview(tv_wrap, columns=cols, show="headings", height=3, selectmode="browse")
-        self.tv.heading("alias", text="账号别名")
-        self.tv.heading("nick", text="小红书昵称")
-        self.tv.heading("proxy", text="代理")
-        self.tv.heading("login", text="登录")
+        self.tv = ttk.Treeview(tv_wrap, columns=cols, show="headings",
+                               height=6, selectmode="browse")
+        self.tv.heading("alias",  text="账号")
+        self.tv.heading("nick",   text="昵称")
+        self.tv.heading("proxy",  text="代理")
+        self.tv.heading("login",  text="登录")
         self.tv.heading("status", text="状态")
-        self.tv.column("alias", width=100, anchor="w")
-        self.tv.column("nick", width=160, anchor="w")
-        self.tv.column("proxy", width=180, anchor="w")
-        self.tv.column("login", width=60, anchor="center")
-        self.tv.column("status", width=130, anchor="w")
-        self.tv.pack(side="left", fill="x", expand=True)
-        sb = ttk.Scrollbar(tv_wrap, orient="vertical", command=self.tv.yview)
-        sb.pack(side="right", fill="y")
-        self.tv.config(yscrollcommand=sb.set)
+        self.tv.column("alias",  width=70,  anchor="w", stretch=False)
+        self.tv.column("nick",   width=0,   stretch=False)   # 隐藏（保留兼容）
+        self.tv.column("proxy",  width=0,   stretch=False)
+        self.tv.column("login",  width=0,   stretch=False)
+        self.tv.column("status", width=140, anchor="w")
+        self.tv.pack(side="left", fill="both", expand=True)
+        sb_acc = ttk.Scrollbar(tv_wrap, orient="vertical", command=self.tv.yview)
+        sb_acc.pack(side="right", fill="y")
+        self.tv.configure(yscrollcommand=sb_acc.set)
         self.tv.bind("<<TreeviewSelect>>", self.on_tv_select)
         self.tv.bind("<Double-1>", lambda e: self.on_login())
 
-        b1 = ttk.Frame(prow); b1.pack(side="left", padx=4)
-        ttk.Button(b1, text="+ 新账号", width=12, command=self.on_acc_new).pack(fill="x", pady=1)
-        ttk.Button(b1, text="🌐 设置代理", width=12, command=self.on_proxy_edit).pack(fill="x", pady=1)
-        ttk.Button(b1, text="启动并登录", width=12, command=self.on_login).pack(fill="x", pady=1)
-        ttk.Button(b1, text="🚀 启动全部", width=12, command=self.on_start_all).pack(fill="x", pady=1)
-        b2 = ttk.Frame(prow); b2.pack(side="left", padx=2)
-        ttk.Button(b2, text="检测IP", width=10, command=self.on_check_ip).pack(fill="x", pady=1)
-        ttk.Button(b2, text="⏹ 停该号", width=10, command=self.on_stop_selected).pack(fill="x", pady=1)
-        ttk.Button(b2, text="✕ 关窗口", width=10, command=self.on_close_selected).pack(fill="x", pady=1)
-        ttk.Button(b2, text="⏹ 全部停止", width=10, command=self.on_stop_all).pack(fill="x", pady=1)
+        # 账号操作按钮区
+        ttk.Separator(sidebar, orient="horizontal").pack(fill="x", pady=8)
+        btn_grid = ttk.Frame(sidebar)
+        btn_grid.pack(fill="x")
+        # 2×2 格局
+        self._btn(btn_grid, "+ 新账号",    self.on_acc_new,      bs="primary",
+                  width=13).grid(row=0, column=0, padx=2, pady=2, sticky="ew")
+        self._btn(btn_grid, "🌐 代理",     self.on_proxy_edit,   bs="info-outline",
+                  width=10).grid(row=0, column=1, padx=2, pady=2, sticky="ew")
+        self._btn(btn_grid, "▶ 登录",      self.on_login,        bs="success",
+                  width=13).grid(row=1, column=0, padx=2, pady=2, sticky="ew")
+        self._btn(btn_grid, "▶▶ 全部",    self.on_start_all,    bs="success-outline",
+                  width=10).grid(row=1, column=1, padx=2, pady=2, sticky="ew")
+        self._btn(btn_grid, "⏹ 停该号",   self.on_stop_selected, bs="danger-outline",
+                  width=13).grid(row=2, column=0, padx=2, pady=2, sticky="ew")
+        self._btn(btn_grid, "⏹ 全停",     self.on_stop_all,     bs="danger",
+                  width=10).grid(row=2, column=1, padx=2, pady=2, sticky="ew")
+        self._btn(btn_grid, "🔍 检测IP",   self.on_check_ip,     bs="secondary",
+                  width=13).grid(row=3, column=0, padx=2, pady=2, sticky="ew")
+        self._btn(btn_grid, "✕ 关窗口",   self.on_close_selected, bs="secondary-outline",
+                  width=10).grid(row=3, column=1, padx=2, pady=2, sticky="ew")
+        btn_grid.columnconfigure(0, weight=1)
+        btn_grid.columnconfigure(1, weight=1)
 
-        # ---- 时间窗 + API 模式 ----
-        tw = ttk.Frame(self.root, padding=(8, 2)); tw.pack(fill="x")
-        ttk.Label(tw, text="安全时间窗 小时:").pack(side="left")
-        self.e_hstart = ttk.Entry(tw, width=4); self.e_hstart.insert(0, "10"); self.e_hstart.pack(side="left")
-        ttk.Label(tw, text=" ~ ").pack(side="left")
-        self.e_hend = ttk.Entry(tw, width=4); self.e_hend.insert(0, "23"); self.e_hend.pack(side="left")
+        # 安全时间窗 + API 模式（折叠在底部）
+        ttk.Separator(sidebar, orient="horizontal").pack(fill="x", pady=(10, 6))
+        ttk.Label(sidebar, text="⏰  运行设置",
+                  font=(FONT_UI, 10, "bold")).pack(anchor="w")
+        tw_inner = ttk.Frame(sidebar, padding=(0, 4))
+        tw_inner.pack(fill="x")
+        ttk.Label(tw_inner, text="时间窗:").grid(row=0, column=0, sticky="w")
+        self.e_hstart = ttk.Entry(tw_inner, width=4)
+        self.e_hstart.insert(0, "10")
+        self.e_hstart.grid(row=0, column=1, padx=2)
+        ttk.Label(tw_inner, text="~").grid(row=0, column=2)
+        self.e_hend = ttk.Entry(tw_inner, width=4)
+        self.e_hend.insert(0, "23")
+        self.e_hend.grid(row=0, column=3, padx=2)
         self.var_api_mode = tk.BooleanVar(value=True)
-        ttk.Checkbutton(tw, text="⚡ API 直发模式（不打开笔记页，速度 5-10×）",
-                        variable=self.var_api_mode).pack(side="left", padx=16)
-        ttk.Label(tw, text="范围外弹确认", foreground="#888").pack(side="left")
-        ttk.Button(tw, text="📋 日志", width=8,
-                   command=self._show_log_window).pack(side="right", padx=4)
+        ttk.Checkbutton(sidebar, text="⚡ API 直发模式",
+                        variable=self.var_api_mode).pack(anchor="w", pady=(4, 0))
+        ttk.Label(sidebar,
+                  text="（不打开页面，速度 5-10×）",
+                  foreground="#888",
+                  font=(FONT_UI, 9)).pack(anchor="w")
 
-        # 进度条行（默认隐藏）
-        self.prog_frame = ttk.Frame(self.root, padding=(8, 2))
+        # ── 右侧主内容区 ──────────────────────────────────────
+        main_area = ttk.Frame(body)
+        main_area.pack(side="left", fill="both", expand=True,
+                       padx=6, pady=6)
+
+        # 进度条行（平时隐藏，运行时显示）
+        self.prog_frame = ttk.Frame(main_area)
         self.prog_var = tk.IntVar(value=0)
-        self.prog_label = ttk.Label(self.prog_frame, text="", foreground="#0a7")
-        self.prog_label.pack(side="left")
-        self.prog_bar = ttk.Progressbar(self.prog_frame, variable=self.prog_var,
-                                         mode="determinate", length=300)
-        self.prog_bar.pack(side="left", padx=10, fill="x", expand=True)
-        # 不 pack frame，由 _set_progress 控制显示
+        self.prog_label = ttk.Label(self.prog_frame, text="",
+                                    foreground="#0a7", font=(FONT_UI, 10))
+        self.prog_label.pack(side="left", padx=(0, 8))
+        self.prog_bar = ttk.Progressbar(self.prog_frame,
+                                         variable=self.prog_var,
+                                         mode="determinate")
+        self.prog_bar.pack(side="left", fill="x", expand=True)
+        # 不 pack，由 _set_progress 控制
 
-        # ---- 主分割：操作Tabs / 结果面板（日志独立浮窗）----
-        self.paned = ttk.PanedWindow(self.root, orient="vertical")
-        self.paned.pack(fill="both", expand=True, padx=8, pady=4)
+        # PanedWindow：上方 Tabs + 下方结果
+        self.paned = ttk.PanedWindow(main_area, orient="vertical")
+        self.paned.pack(fill="both", expand=True)
 
-        # 上：操作 Tabs
         nb_frame = ttk.Frame(self.paned)
         self.paned.add(nb_frame, weight=2)
-        nb = ttk.Notebook(nb_frame); nb.pack(fill="both", expand=True, pady=(0, 4))
+        nb = ttk.Notebook(nb_frame)
+        nb.pack(fill="both", expand=True)
         self._build_tabs(nb)
 
-        # 下：结果面板
         results_frame = ttk.Frame(self.paned)
         self.paned.add(results_frame, weight=4)
         self._build_results(results_frame)
 
-        # ---- 日志独立浮窗（自动停靠在主窗口右侧）----
+        # ══════════════════════════════════════════════════════
+        # 3. 底部状态栏
+        # ══════════════════════════════════════════════════════
+        try:
+            import ttkbootstrap as ttkb
+            sbar = ttkb.Frame(self.root, bootstyle="secondary", padding=(10, 3))
+        except Exception:
+            sbar = tk.Frame(self.root, bg="#e8eaed", pady=3)
+        sbar.pack(fill="x", side="bottom")
+        self._status_var = tk.StringVar(value="就绪")
+        try:
+            import ttkbootstrap as ttkb
+            self._status_lbl = ttkb.Label(sbar, textvariable=self._status_var,
+                                          bootstyle="inverse-secondary",
+                                          font=(FONT_UI, 9))
+        except Exception:
+            self._status_lbl = ttk.Label(sbar, textvariable=self._status_var,
+                                          font=(FONT_UI, 9))
+        self._status_lbl.pack(side="left")
+
+        # ══════════════════════════════════════════════════════
+        # 4. 日志独立浮窗
+        # ══════════════════════════════════════════════════════
         self._build_log_window()
 
     # ---------- 日志浮窗 ----------
@@ -1672,34 +1811,42 @@ class App:
 
     # ============ 结果面板 ============
     def _build_results(self, parent):
-        rf = ttk.LabelFrame(parent,
-                            text="🗂 结果面板（点 ☐ 勾选 | 列头排序 | 点 URL 复制 | 双击行用浏览器打开）",
-                            padding=4)
+        rf = ttk.Frame(parent, padding=4)
         rf.pack(fill="both", expand=True)
 
-        # 顶部：批量操作按钮（分两行，防止窗口变窄时按钮被截断）
-        # 第一行：选择 + 批量操作
-        bf = ttk.Frame(rf); bf.pack(fill="x", pady=(0, 2))
-        ttk.Button(bf, text="✓ 全选", command=self._sel_all).pack(side="left", padx=2)
-        ttk.Button(bf, text="✗ 全不选", command=self._sel_none).pack(side="left", padx=2)
-        ttk.Button(bf, text="反选", command=self._sel_inv).pack(side="left", padx=2)
-        ttk.Separator(bf, orient="vertical").pack(side="left", fill="y", padx=8)
-        ttk.Label(bf, text="选中的：").pack(side="left")
-        ttk.Button(bf, text="📥 批量采笔记+评论", command=self.on_bulk_detail).pack(side="left", padx=2)
-        ttk.Button(bf, text="💗 批量点赞", command=self.on_bulk_like).pack(side="left", padx=2)
-        ttk.Button(bf, text="💬 批量评论", command=self.on_bulk_comment).pack(side="left", padx=2)
-        ttk.Button(bf, text="👤 关注作者", command=self.on_bulk_follow_author).pack(side="left", padx=2)
-        ttk.Button(bf, text="📋 复制URL", command=self.on_copy_urls).pack(side="left", padx=2)
+        # 标题行
+        title_row = ttk.Frame(rf)
+        title_row.pack(fill="x", pady=(0, 6))
+        ttk.Label(title_row, text="🗂  结果面板",
+                  font=(FONT_UI, 11, "bold")).pack(side="left")
+        ttk.Label(title_row,
+                  text="点 ☐ 勾选 | 列头排序 | 点 URL 复制 | 双击行打开浏览器",
+                  foreground="#888", font=(FONT_UI, 9)).pack(side="left", padx=10)
+        ttk.Separator(rf, orient="horizontal").pack(fill="x", pady=(0, 6))
 
-        # 第二行：导入 / 仅采IP / 导出 / 清空 / 统计
+        # 第一行：选择 + 批量操作
+        bf = ttk.Frame(rf); bf.pack(fill="x", pady=(0, 3))
+        self._btn(bf, "✓ 全选",   self._sel_all,   bs="secondary-outline").pack(side="left", padx=2)
+        self._btn(bf, "✗ 全不选", self._sel_none,  bs="secondary-outline").pack(side="left", padx=2)
+        self._btn(bf, "⇌ 反选",   self._sel_inv,   bs="secondary-outline").pack(side="left", padx=2)
+        ttk.Separator(bf, orient="vertical").pack(side="left", fill="y", padx=8)
+        ttk.Label(bf, text="批量操作：").pack(side="left")
+        self._btn(bf, "📥 采笔记+评论", self.on_bulk_detail,
+                  bs="primary").pack(side="left", padx=2)
+        self._btn(bf, "💗 点赞",  self.on_bulk_like,          bs="info-outline").pack(side="left", padx=2)
+        self._btn(bf, "💬 评论",  self.on_bulk_comment,       bs="info-outline").pack(side="left", padx=2)
+        self._btn(bf, "👤 关注",  self.on_bulk_follow_author, bs="info-outline").pack(side="left", padx=2)
+        self._btn(bf, "📋 复制URL", self.on_copy_urls,        bs="secondary").pack(side="left", padx=2)
+
+        # 第二行：导入 / 导出 / 清空
         bf2 = ttk.Frame(rf); bf2.pack(fill="x", pady=(0, 4))
-        ttk.Button(bf2, text="📂 导入URL列表", command=self.on_import_urls).pack(side="left", padx=2)
-        ttk.Button(bf2, text="🌍 勾选 → 仅采IP属地", command=self.on_bulk_ip_only).pack(side="left", padx=2)
+        self._btn(bf2, "📂 导入URL",      self.on_import_urls,     bs="secondary").pack(side="left", padx=2)
+        self._btn(bf2, "🌍 仅采IP属地",  self.on_bulk_ip_only,    bs="secondary").pack(side="left", padx=2)
         ttk.Separator(bf2, orient="vertical").pack(side="left", fill="y", padx=6)
-        ttk.Button(bf2, text="💾 导出 Excel", command=self.on_export_results).pack(side="left", padx=2)
-        ttk.Button(bf2, text="🗑 清空结果", command=self._clear_results).pack(side="left", padx=2)
-        self.lbl_count = ttk.Label(bf2, text="共 0 条 / 已勾 0", foreground="#666",
-                                   font=(FONT_UI, 10, "bold"))
+        self._btn(bf2, "💾 导出 Excel",   self.on_export_results,  bs="success").pack(side="left", padx=2)
+        self._btn(bf2, "🗑 清空结果",     self._clear_results,     bs="danger-outline").pack(side="left", padx=2)
+        self.lbl_count = ttk.Label(bf2, text="共 0 条 / 已勾 0",
+                                   foreground="#888", font=(FONT_UI, 10, "bold"))
         self.lbl_count.pack(side="right", padx=10)
 
         # ---- 过滤行（多字段筛选） ----
